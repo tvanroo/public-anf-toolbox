@@ -2,6 +2,10 @@
 
 *********************** WARNING: UNSUPPORTED AND UNTESTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
+Lat Edit Date: 10/04/2024
+
+
+
 Script Purpose: This script automates the allocation of Throughput MiBs/Sec to Azure NetApp Files volumes based on their historical performance metrics. Several variables allow for the behavior to be customized.
 
 The script looks back at historical throughput usage metrics for each volume over a defined time period. Then it calculates the proportion of throughput each volume should be assigned, allocating all available throughput in the pool.
