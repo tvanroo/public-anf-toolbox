@@ -4,7 +4,7 @@
 
 Lat Edit Date: 10/04/2024
 Latest Version found at: https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS/ANF-QoS-Autoscale-Manual.ps1
-
+Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 
 Script Purpose: This script automates the allocation of Throughput MiBs/Sec to Azure NetApp Files volumes based on their historical performance metrics. Several variables allow for the behavior to be customized.
