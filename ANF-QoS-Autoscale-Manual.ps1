@@ -3,6 +3,7 @@
 *********************** WARNING: UNSUPPORTED AND UNTESTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
 Lat Edit Date: 10/04/2024
+Latest Version found at: https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF-QoS-Autoscale-Manual.ps1
 
 
 
