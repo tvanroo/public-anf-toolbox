@@ -10,3 +10,21 @@ This repository is published publicly as a resource for other Azure NetApp Files
 3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
+
+
+![awesome azure netapp files](awesomeanf.png?raw=true "Awesome Azure NetApp Files")
+
+# Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources
+
+- [Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources](https://github.com/ANFTechTeam/awesome-anf)
+
+- [Toby's ANF Scripts](#tobys-anf-scripts)
+
+## General
+### QoS Automation
+- [Mimic Auto](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1)
+- [Volume Equity](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1)
+- [Performance](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1)
+- [Self Leveling](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1)
+### ANF Build Automation
+- [Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1)
