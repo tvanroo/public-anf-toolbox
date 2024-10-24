@@ -11,5 +11,5 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
 # Download Script:
-[Volume Equity](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1)
-    - Allocates _all_ pool throughput to volumes equally, regardless of volume size. Result: Volume performance is governed by volume quantity.
+[Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
+- Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
