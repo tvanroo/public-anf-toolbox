@@ -1,2 +1,3 @@
 # Ignore sync.ffs_db files everywhere
 sync.ffs_db
+Automated Build and Teardown/variables.ps1
