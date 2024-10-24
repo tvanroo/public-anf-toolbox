@@ -1,5 +1,2 @@
 [Mimic Auto](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1)
     - Allocates _all_ pool throughput to volumes based on relative volume size. Result: Volume performance is governed by volume size.
-
-## [(Download)Mimic Auto](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1)
-    - Allocates _all_ pool throughput to volumes based on relative volume size. Result: Volume performance is governed by volume size.
