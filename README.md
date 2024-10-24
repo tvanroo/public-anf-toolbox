@@ -12,9 +12,7 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
 
-![awesome azure netapp files](awesomeanf.png?raw=true "Awesome Azure NetApp Files")
-
-# Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources
+# Index of Resources
 
 - [Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources](https://github.com/ANFTechTeam/awesome-anf)
 
