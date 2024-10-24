@@ -1,4 +1,5 @@
 # Toby's Public ANF Scripts & Tools
+
 # ⚠️ Warning
 
 **Important Notice:**
@@ -11,19 +12,28 @@ This repository is published publicly as a resource for other Azure NetApp Files
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
-
 # Index of Resources
 
 - [Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources](https://github.com/ANFTechTeam/awesome-anf)
 
 - [Toby's ANF Scripts](#tobys-anf-scripts)
 
-## General
+# Resource Contents
+
+## Toby's ANF Scripts
+
 ### QoS Automation
+
 - [Mimic Auto](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1)
-    - Allocates throughput to volumes base don relitive size. Improves on QOS Auto by fully allocating all available Capacity Pool throughput to provisioned Volumes.
+    - Allocates _all_ pool throughput to volumes based on relative volume size. Result: Volume performance is governed by volume size.
 - [Volume Equity](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1)
+    - Allocates _all_ pool throughput to volumes equally, regardless of volume size. Result: Volume performance is governed by volume quantity.
 - [Performance](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1)
+    - Allocates _all_ pool throughput to volumes based on historical average throughput usage metrics. Result: Volume performance is governed by historical throughput usage.
 - [Self Leveling](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1)
+    - Reallocates a defined percentage of throughput to volumes based on the historical frequency of Throughput Limit Reached metrics. Result: Volume performance is adjusted to minimize Throughput Limit Reached incidents.
+
 ### ANF Build Automation
+
 - [Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1)
+    - Quick build/teardown of ANF Account, Capacity Pool, and Volume(s). Variables can be edited to match deployment requirements.
