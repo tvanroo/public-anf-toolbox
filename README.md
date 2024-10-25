@@ -37,3 +37,7 @@ By using any content from this repository, you acknowledge that you do so at you
 
 - [Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1)
     - Quick build/teardown of ANF Account, Capacity Pool, and Volume(s). Variables can be edited to match deployment requirements.
+
+### ANF Scaling Plan
+- [ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Weekend%20Scaling%20Plan)
+    - Moves volumes to a lower Service Level on the weekend and back for the work week to reduce active data costs for ~35% of the week. 
