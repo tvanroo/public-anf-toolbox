@@ -17,6 +17,8 @@ It moves volumes between pools based on the day of the week and time of day.
 
 Note: Lowering the service level of a volume cannot happen within 24 hours of a previous increase in service level.
 
+WARNING: THis script is only designed to work with Auto QoS Pools. It will not work with manual QoS pools.
+
 Even with Cool Access already enabled, further savings are achieved with this script. 
 Setting a weekend range from 6 PM Friday to 6 AM Monday will reduce the cost of your active data to the lower tier for 35% of the week.
 
