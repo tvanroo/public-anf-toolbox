@@ -11,5 +11,5 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
 # Download Script:
-[ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Weekend%20Scaling%20Plan)
+[ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Weekend%20Scaling%20Plan/anf-weekend-scaling-plan.ps1)
     - Moves volumes to a lower Service Level on the weekend and back for the work week to reduce active data costs for ~35% of the week. 
