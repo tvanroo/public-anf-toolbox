@@ -1,5 +1,12 @@
 <# *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
+This repository is published publicly as a resource for other Azure NetApp Files (ANF) and Azure specialists. However, please be aware of the following:
 
+1. **Unofficial Content:** Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
+2. **No Endorsement:** While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
+3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
+
+By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
+*********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 Last Edit Date: 10/24/2024
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
@@ -16,17 +23,17 @@ This is primarily used in testing to quickly destroy and recreate resources.
 
 
 # User Editable Variables:
-    $tenantId =             "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Tenant ID for the Azure subscription
-    $resourceGroupName =    "example-rg"                            # Resource group name where the Azure NetApp Files resources are located
-    $anfAccountName =       "example-anf-account"                   # Azure NetApp Files account name
-    $anfPoolName =          "example-anf-pool"                      # Azure NetApp Files capacity pool name
-    $location =             "westus2"                               # Azure Region in "Name" format. Full list can be found by running "az account list-locations -o table"
-    $anfPoolSizeInTiB =     1                                       # Desired Pool Size in TiBs (minimum 1)
-    $vol_prefix =           "Vol"                                   # Volumes will be sequentially named Vol1, Vol2, etc. The CreationToken paramater re-uses vol# as well. Existing Volumes with matching Vol# name will be skipped, so if Vol1 already exxists and 2 total Volumes are requested, then only Vol2 would be created, and Vol1 would remain unchanged.
-    $vol_qty =              3                                       # Total number of volumes to be created
-    $volSizeInGiB =         60                                      # Size in GiB for each Volume. Volumes with Variable sizes are not currently supported. (minimum 50)
-    $serviceLevel =         "Standard"                              # "Standard" or "Premium" or "Ultra"
-    $delegatedSubnetId =    "/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/example-rg/providers/Microsoft.Network/virtualNetworks/example-vnet/subnets/example-sub" # Set delegated subnet id (must exist)
+$tenantId =             "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Tenant ID for the Azure subscription
+$resourceGroupName =    "example-rg"                            # Resource group name where the Azure NetApp Files resources are located
+$anfAccountName =       "example-anf-account"                   # Azure NetApp Files account name
+$anfPoolName =          "example-anf-pool"                      # Azure NetApp Files capacity pool name
+$location =             "westus2"                               # Azure Region in "Name" format. Full list can be found by running "az account list-locations -o table"
+$anfPoolSizeInTiB =     1                                       # Desired Pool Size in TiBs (minimum 1)
+$vol_prefix =           "Vol"                                   # Volumes will be sequentially named Vol1, Vol2, etc. The CreationToken paramater re-uses vol# as well. Existing Volumes with matching Vol# name will be skipped, so if Vol1 already exxists and 2 total Volumes are requested, then only Vol2 would be created, and Vol1 would remain unchanged.
+$vol_qty =              3                                       # Total number of volumes to be created
+$volSizeInGiB =         60                                      # Size in GiB for each Volume. Volumes with Variable sizes are not currently supported. (minimum 50)
+$serviceLevel =         "Standard"                              # "Standard" or "Premium" or "Ultra"
+$delegatedSubnetId =    "/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/example-rg/providers/Microsoft.Network/virtualNetworks/example-vnet/subnets/example-sub" # Set delegated subnet id (must exist)
 
 # Calculations based on User Editable Variables:
     $volSize = $volSizeInGiB * 1073741824                   # in bytes, 1 GiB = 1073741824 bytes
@@ -73,9 +80,6 @@ if ($option -eq 1) {
         $additionaVolumeTotalSize = ($vol_qty * $volSize) / 1073741824  
         $totalVolumeSize = $existingVolSizeGiB + $additionaVolumeTotalSize
 
-    # Display total pool size and total volume size
-    Write-Host "Existing Volume Size: $existingVolSizeGiB GiB"
-
     # If existing volume size + new volumes total size exceeds total pool size, notify and exit. If not, notify on total proposed volume size
     if ($totalVolumeSize -gt $anfPoolSizeInGiB) {
         Write-Host "Total volume size exceeds pool size of ${anfPoolSizeInGiB} GiB: $existingVolSizeGiB GiB Existing + $additionaVolumeTotalSize GiB New = $totalVolumeSize GiB, exiting..." -ForegroundColor Red
@@ -114,7 +118,7 @@ if ($option -eq 1) {
         $volName = $vol_prefix + $i
         if (-not (Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -ErrorAction SilentlyContinue)) {
             Write-Host "Creating ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
-            New-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -Location $location -ServiceLevel $serviceLevel -UsageThreshold $volSize -SubnetId $delegatedSubnetId -CreationToken $volName > $null
+            New-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -Location $location -ServiceLevel $serviceLevel -UsageThreshold $volSize -SubnetId $delegatedSubnetId -CreationToken $volName -NetworkFeature Standard > $null
             Write-Host "Volume $volName created" -ForegroundColor Green
         } else {
             Write-Host "ANF Volume $volName already exists in $anfPoolName" -ForegroundColor Green
