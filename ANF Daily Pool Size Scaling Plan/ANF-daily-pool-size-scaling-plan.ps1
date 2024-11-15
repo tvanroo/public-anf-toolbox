@@ -48,21 +48,14 @@ $MiBsperTiB =               128                                                 
     $offHoursKiBs = $offHoursTiBs  * 1024 * 1024 * 1024 * 1024 
     $onHoursKiBs = $onHoursTiBs  * 1024 * 1024 * 1024 * 1024
 
-# Begin Script
-    # Get the current date and time
+
+# Get the current date and time
     $currentDateTime = Get-Date
     $timeZoneInfo = [System.TimeZoneInfo]::FindSystemTimeZoneById($timeZone)
     $timeZoneDateTime = [System.TimeZoneInfo]::ConvertTime($currentDateTime, $timeZoneInfo)
     $currentDay = $timeZoneDateTime.ToString("dddd")
     $currentTime = $timeZoneDateTime.ToString("HH:mm")
 
-<# Used for manually setting date/time for easier testing operations
-$currentDay = "Friday"
-$currentTime = "05:00"
-$currentDay
-$currentTime
-
-#>
     if (-not (Get-AzContext)) {
         Connect-AzAccount -TenantId $tenantId
         Get-AzContext
@@ -81,7 +74,7 @@ $currentTime
 # Get Capacity Pool QoS Type
     $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
     $capacityPoolQosType = $anfPool.QosType
-# If QoS is Auto and ConvertToManualMode is set to "Yes", convert the Capacity Pool to Manual
+# If QoS is Auto, convert the Capacity Pool to Manual
     if ($capacityPoolQosType -eq "Auto") {
         Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
         $anfPool | Update-AzNetAppFilesPool -QosType Manual > $null
@@ -89,20 +82,21 @@ $currentTime
         Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
     }   
 
-# If after hours or weekend, write host "After hours or weekend"
+# If after hours or weekend
     if ($weekendDays -contains $currentDay -or $weekDays -notcontains $currentDay -or $currentTime -lt $dayStartTime -or $currentTime -ge $dayEndTime) {
         Write-Host "After hours or weekend"
-        #Set volume QoS to $offHoursMiBs/$volumeList.Count
-        foreach ($volume in $volumeList) {
+            #Set volume throughput allocation
+            foreach ($volume in $volumeList) {
             Update-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -Location $volume.Location -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.CreationToken -ServiceLevel $volume.ServiceLevel -ThroughputMibps $offHoursMiBsperVolume > $null
         }
-        # Set Pool Size to $offHoursTiBs
+        # Set Pool Size
         Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -PoolSize $offHoursKiBs > $null
 
     } else {
         Write-Host "During business hours"
+            #Set Pool Size
             Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $anfPool.Location -AccountName $anfAccountName -Name $anfPoolName -PoolSize $onHoursKiBs > $null
-            #Set volume QoS to $onHoursMiBs/$volumeList.Count
+            #Set volume throughput allocation
             foreach ($volume in $volumeList) {
                 Update-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -Location $volume.Location -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.CreationToken -ServiceLevel $volume.ServiceLevel -ThroughputMibps $onHoursMiBsperVolume > $null
             }
