@@ -11,5 +11,5 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
 # Download Script:
-[ANF Daily Pool Size Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1)
-    - Allocates _all_ pool throughput to volumes equally, regardless of volume size. Result: Volume performance is governed by volume quantity.
+[ANF Daily Pool Size Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Daily%20Pool%20Size%20Scaling%20Plan/ANF-daily-pool-size-scaling-plan.ps1)
+    - Resizes the Capacity Pool and allocates throughput to volumes equally to scale up/down performance for on/off hours.
