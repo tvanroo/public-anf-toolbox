@@ -40,8 +40,12 @@ By using any content from this repository, you acknowledge that you do so at you
     - Quick build/teardown of ANF Account, Capacity Pool, and Volume(s). Variables can be edited to match deployment requirements.
 
 ### ANF Scaling Plan
-- [ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Weekend%20Scaling%20Plan)
-    - Moves volumes to a lower Service Level on the weekend and back for the work week to reduce active data costs for ~35% of the week. 
+- [ANF Weekend Scaling Plan (Move volumes between tiers)](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Weekend%20Scaling%20Plan)
+    - Moves volumes to a lower Service Level on the weekend and back to the higher Service Level for the work week to reduce active data costs for ~35% of the week.
+    - Note: Moving a volume back down to a lower Service Level (e.g. from Premium to Standard) requires 24 hours on the higher tier. Therefore, this cost saving strategy works for weekends but is not able to reach daily after-hours granularity.
+- [ANF Daily Pool Size Scaling Plan (Increase size & throughput of Pool & Volume)](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Daily%20Pool%20Size%20Scaling%20Plan)
+    - Resizes the Capacity Pool and allocates throughput to volumes equally to scale up/down performance for on/off hours.
+    - Note: Unlike switching Service Levels, increasing and decreasing the size of the pool and then throughput allocation can happen anytime. This cost saving strategy can capture after-hours and weekend savings.
 
 ### Migration Tools
 - [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
