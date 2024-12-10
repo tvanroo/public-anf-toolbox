@@ -12,5 +12,5 @@ By using any content from this repository, you acknowledge that you do so at you
 
 
 # Download Script:
-[Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
+[Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster.ps1)
 - Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
