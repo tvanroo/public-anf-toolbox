@@ -42,3 +42,7 @@ By using any content from this repository, you acknowledge that you do so at you
 ### ANF Scaling Plan
 - [ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Weekend%20Scaling%20Plan)
     - Moves volumes to a lower Service Level on the weekend and back for the work week to reduce active data costs for ~35% of the week. 
+
+### Migration Tools
+- [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
+    - Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
