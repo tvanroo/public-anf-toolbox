@@ -67,7 +67,7 @@ $files | %{
         write-host "src $src"
         write-host "srcpath $srcPath"
         write-host "destpath $destPath"
-        robocopy $src $dest $name /E /nfl /XO /np /mt:$mtreads /ndl /r:3 /w:1 /copyall
+        robocopy $src $dest $name /MIR /copyall /r:1 /w:1 /mt:$mtreads
         Write-Host $srcPath " completed"
     }
     $j = Get-Job -State "Running"
