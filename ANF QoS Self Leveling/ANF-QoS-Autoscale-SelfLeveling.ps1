@@ -127,9 +127,9 @@ $unallocatedThroughputMibps = [math]::Round($capacityPoolMaxThroughput - $totalC
 
 
 ####Injecting Fake Test Data ###### Update the ThroughputLimitMetric value for each volume
-$volumeData[0].ThroughputLimitMetric = 0  # Vol1
-$volumeData[1].ThroughputLimitMetric = 5  # Vol2
-$volumeData[2].ThroughputLimitMetric = 15  # Vol3
+#$volumeData[0].ThroughputLimitMetric = 0  # Vol1
+#$volumeData[1].ThroughputLimitMetric = 5  # Vol2
+#$volumeData[2].ThroughputLimitMetric = 15  # Vol3
 
 
 # Calculate total throughput allocated to all volumes
