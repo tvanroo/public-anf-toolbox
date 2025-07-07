@@ -1,3 +1,6 @@
 # Ignore sync.ffs_db files everywhere
 sync.ffs_db
 **/variables.ps1
+
+# Ignore Oracle JDK folder
+Oracle_JDK-24/

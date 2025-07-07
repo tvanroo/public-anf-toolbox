@@ -33,6 +33,11 @@ By using any content from this repository, you acknowledge that you do so at you
 - [Self Leveling](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling)
     - Reallocates a defined percentage of throughput to volumes based on the historical frequency of throughput limit reached events. Result: Volume performance is adjusted to minimize throughput limit reached incidents.
 
+### ANF Monitoring & Analytics
+
+- [Throughput Metrics Collector](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Throughput%20Metrics%20Collector)
+    - Collects the last 30 days of throughput metrics for Azure NetApp Files volumes with 5-minute resolution and exports the data to CSV format. Result: Historical throughput data for analysis and reporting.
+
 ### ANF Build Automation
 
 - [Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown)
