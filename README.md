@@ -52,5 +52,7 @@ By using any content from this repository, you acknowledge that you do so at you
     - Note: Unlike switching Service Levels, increasing and decreasing the size of the pool and then throughput allocation can happen anytime. This cost saving strategy can capture after-hours and weekend savings.
 
 ### Migration Tools
+- [ANF Move AVD Profiles](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Move%20AVD%20Profiles)
+    - Migrates FSLogix AVD (Azure Virtual Desktop) profiles from existing SMB shares to Azure NetApp Files SMB shares with intelligent conflict resolution and profile-in-use detection for safe cutover operations.
 - [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
     - Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
