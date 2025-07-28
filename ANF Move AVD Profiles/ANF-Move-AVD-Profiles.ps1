@@ -29,7 +29,7 @@ Profiles that are currently in use and profiles with conflicting metadata are sk
 
 # Define source and destination paths
 $SourcePath = "\\xyz.file.core.windows.net\xyz"
-$DestinationPath = "\\ANF-xyz.oge.gov\xyz-prod-001-anf-vol1-profiles"
+$DestinationPath = "\\ANF-xyz.abc.gov\xyz-prod-001-anf-vol1-profiles"
 $FilterString = "Ssdfgsdfhsdfh"  # Replace with your filter string
 
 # Get all top-level directories in the source path
