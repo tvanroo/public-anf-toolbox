@@ -589,8 +589,8 @@ $requiredPoolSizeTiB = [math]::Ceiling($newTotalVolumeSize / 1024)
 # Check if we can shrink the pool by a full TiB (1024 GiB buffer for safety)
 $canShrinkToTiB = [math]::Floor(($currentPoolSizeGiB - $newTotalVolumeSize - 1024) / 1024)
 if ($canShrinkToTiB -gt 0) {
-    # We can shrink by at least one full TiB
-    $optimalPoolSizeTiB = [math]::Max($requiredPoolSizeTiB, $currentPoolSizeTiB - $canShrinkToTiB)
+    # We can shrink - use the minimum required size for maximum cost efficiency
+    $optimalPoolSizeTiB = $requiredPoolSizeTiB
 } else {
     # Use the minimum required size
     $optimalPoolSizeTiB = $requiredPoolSizeTiB
