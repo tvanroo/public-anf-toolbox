@@ -8,22 +8,31 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
-Last Edit Date: 12/26/2024
+Last Edit Date: 08/15/2025
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-1. This script copies and then deletes the contents of a source directory to a destination directory using BITS and is tuned for FSLogix Profile data and moving from an old SMB path to an Azure NetApp Files (ANF) SMB share. 
+1. This script safely copies and then deletes the contents of a source directory to a destination directory using BITS and is tuned for FSLogix Profile data and moving from an old SMB path to an Azure NetApp Files (ANF) SMB share. 
 2. The script compares the creation and modified dates of files in the source and destination. 
     - If the source file is more recently modified, it will overwrite the destination file. (don't overwrite a real profile with a recently created empty profile file)
     - If the source file is more recently created, it will not overwrite the destination file. (Don't overwrite a real profile with an older version of the same profile)
 3. To skip syncing profiles that are in use, the script will check for a .metadata file in the source directory or any subdirectory.
+4. SAFETY FEATURES:
+    - Automatically creates destination directories if they don't exist
+    - Validates file integrity using SHA256 hash comparison and file size verification
+    - Only deletes source files after successful copy and validation
+    - Comprehensive error handling with detailed logging
+    - Removes failed/partial destination files on copy errors
+    - Safe directory cleanup that only removes truly empty directories
 
 This is the final Cutover script for an FSLogix SMB path move. 
-It should be used when both the old and new paths are in the FSLogix Profile container setting. (ususally with the old Path in the primary position)
-Then for profile(s) that are not in use to be copied form the old SMB to the new SMB and the source data removed. 
+It should be used when both the old and new paths are in the FSLogix Profile container setting. (usually with the old Path in the primary position)
+Then for profile(s) that are not in use to be copied from the old SMB to the new SMB and the source data removed. 
 This will cause any moved profiles to start being used from the new SMB path.
 Profiles that are currently in use and profiles with conflicting metadata are skipped. 
+
+IMPORTANT: Source files are only deleted after successful copy validation. If validation fails, source files are preserved and detailed error information is provided. 
 
 #>
 
