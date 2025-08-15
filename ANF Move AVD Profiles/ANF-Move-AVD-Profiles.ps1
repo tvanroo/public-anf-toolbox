@@ -67,60 +67,141 @@ foreach ($Directory in $Directories) {
                 # Compare creation and modified dates
                 if ($SourceFile.CreationTime -eq $DestinationFile.CreationTime) {
                     if ($SourceFile.LastWriteTime -gt $DestinationFile.LastWriteTime) {
+                        # Ensure destination directory exists
+                        $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
+                        if (-not (Test-Path $DestinationDirectory)) {
+                            New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
+                            Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
+                        }
+
                         # Measure the time taken for the transfer
                         $startTime = Get-Date
-                        ############################
-                        #Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
-                        $endTime = Get-Date
+                        try {
+                            Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
+                            $endTime = Get-Date
 
-                        # Calculate the transfer speed
-                        $duration = ($endTime - $startTime).TotalSeconds
-                        $fileSize = (Get-Item $SourceFile.FullName).Length / 1MB
-                        $speed = $fileSize / $duration
+                            # Validate the copy was successful
+                            $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
+                            $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
+                            $SourceSize = (Get-Item $SourceFile.FullName).Length
+                            $DestinationSize = (Get-Item $DestinationFilePath).Length
 
-                        Write-Host ("Updated: $DestinationFilePath at {0:N2} MiB/s" -f $speed) -ForegroundColor Green
+                            if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
+                                # Calculate the transfer speed
+                                $duration = ($endTime - $startTime).TotalSeconds
+                                $fileSize = $SourceSize / 1MB
+                                $speed = if ($duration -gt 0) { $fileSize / $duration } else { 0 }
 
-                        # Remove the source file after successful transfer
-                        ############################
-                        #Remove-Item -Path $SourceFile.FullName -Force
-                        Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                                Write-Host ("Updated: $DestinationFilePath at {0:N2} MiB/s - VALIDATED" -f $speed) -ForegroundColor Green
+
+                                # Remove the source file after successful transfer and validation
+                                Remove-Item -Path $SourceFile.FullName -Force
+                                Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                            } else {
+                                Write-Host "ERROR: Copy validation failed for $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
+                                Write-Host "  Source Hash: $($SourceHash.Hash)" -ForegroundColor Red
+                                Write-Host "  Dest Hash: $($DestinationHash.Hash)" -ForegroundColor Red
+                                Write-Host "  Source Size: $SourceSize bytes" -ForegroundColor Red
+                                Write-Host "  Dest Size: $DestinationSize bytes" -ForegroundColor Red
+                            }
+                        } catch {
+                            Write-Host "ERROR: Failed to copy $($SourceFile.FullName) to $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
+                            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
                     } else {
                         Write-Host "Skipped (destination file modified date is -ge the source.): $DestinationFilePath" -ForegroundColor White
 
-                        # Remove the source file if it matches the destination
-                        ###############################
-                        #Remove-Item -Path $SourceFile.FullName -Force
-                        Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                        # Validate files are identical before removing source
+                        try {
+                            $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
+                            $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
+                            $SourceSize = (Get-Item $SourceFile.FullName).Length
+                            $DestinationSize = (Get-Item $DestinationFilePath).Length
+
+                            if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
+                                # Remove the source file only if it matches the destination
+                                Remove-Item -Path $SourceFile.FullName -Force
+                                Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                            } else {
+                                Write-Host "WARNING: Files differ - SOURCE NOT DELETED: $($SourceFile.FullName)" -ForegroundColor Red
+                            }
+                        } catch {
+                            Write-Host "ERROR: Could not validate files - SOURCE NOT DELETED: $($SourceFile.FullName)" -ForegroundColor Red
+                            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
                     }
                 } else {
                     Write-Host "Skipped (creation dates differ, new empty profile likely created, resolve manually.): $DestinationFilePath" -ForegroundColor Yellow
                 }
             } else {
+                # Ensure destination directory exists
+                $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
+                if (-not (Test-Path $DestinationDirectory)) {
+                    New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
+                    Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
+                }
+
                 # Measure the time taken for the transfer
                 $startTime = Get-Date
-                ############################
-                #Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
-                $endTime = Get-Date
+                try {
+                    Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
+                    $endTime = Get-Date
 
-                # Calculate the transfer speed
-                $duration = ($endTime - $startTime).TotalSeconds
-                $fileSize = (Get-Item $SourceFile.FullName).Length / 1MB
-                $speed = $fileSize / $duration
+                    # Validate the copy was successful
+                    $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
+                    $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
+                    $SourceSize = (Get-Item $SourceFile.FullName).Length
+                    $DestinationSize = (Get-Item $DestinationFilePath).Length
 
-                Write-Host ("Copied new file: $DestinationFilePath at {0:N2} MiB/s" -f $speed) -ForegroundColor Green
+                    if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
+                        # Calculate the transfer speed
+                        $duration = ($endTime - $startTime).TotalSeconds
+                        $fileSize = $SourceSize / 1MB
+                        $speed = if ($duration -gt 0) { $fileSize / $duration } else { 0 }
 
-                # Remove the source file after successful transfer
-                ############################
-                #Remove-Item -Path $SourceFile.FullName -Force
-                Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                        Write-Host ("Copied new file: $DestinationFilePath at {0:N2} MiB/s - VALIDATED" -f $speed) -ForegroundColor Green
+
+                        # Remove the source file after successful transfer and validation
+                        Remove-Item -Path $SourceFile.FullName -Force
+                        Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "ERROR: Copy validation failed for new file $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
+                        Write-Host "  Source Hash: $($SourceHash.Hash)" -ForegroundColor Red
+                        Write-Host "  Dest Hash: $($DestinationHash.Hash)" -ForegroundColor Red
+                        Write-Host "  Source Size: $SourceSize bytes" -ForegroundColor Red
+                        Write-Host "  Dest Size: $DestinationSize bytes" -ForegroundColor Red
+                        
+                        # Remove the failed destination file
+                        if (Test-Path $DestinationFilePath) {
+                            Remove-Item -Path $DestinationFilePath -Force
+                            Write-Host "Removed failed destination file: $DestinationFilePath" -ForegroundColor Red
+                        }
+                    }
+                } catch {
+                    Write-Host "ERROR: Failed to copy new file $($SourceFile.FullName) to $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
+                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+                    
+                    # Remove any partially created destination file
+                    if (Test-Path $DestinationFilePath) {
+                        Remove-Item -Path $DestinationFilePath -Force
+                        Write-Host "Removed partial destination file: $DestinationFilePath" -ForegroundColor Red
+                    }
+                }
             }
         }
 
-        # Remove the source directory if it is empty
-        if (-not (Get-ChildItem -Path $Directory.FullName -Recurse)) {
-            ############################
-            #Remove-Item -Path $Directory.FullName -Force
-            Write-Host "Deleted: $($Directory.FullName)" -ForegroundColor Yellow
+        # Remove the source directory if it is empty (but only after all files are successfully processed)
+        try {
+            $RemainingItems = Get-ChildItem -Path $Directory.FullName -Recurse -Force
+            if (-not $RemainingItems) {
+                Remove-Item -Path $Directory.FullName -Force
+                Write-Host "Deleted empty directory: $($Directory.FullName)" -ForegroundColor Yellow
+            } else {
+                Write-Host "Directory not empty, keeping: $($Directory.FullName)" -ForegroundColor Gray
+                Write-Host "  Remaining items: $($RemainingItems.Count)" -ForegroundColor Gray
+            }
+        } catch {
+            Write-Host "WARNING: Could not remove directory $($Directory.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
         }
     } else {
         Write-Host "Skipped directory (does not match filter): $($Directory.FullName)" -ForegroundColor Gray
