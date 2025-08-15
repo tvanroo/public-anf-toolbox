@@ -59,6 +59,13 @@ foreach ($Directory in $Directories) {
             # Define the corresponding destination file path
             $DestinationFilePath = $SourceFile.FullName -replace [regex]::Escape($SourcePath), $DestinationPath
 
+            # Ensure destination directory exists BEFORE any file operations
+            $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
+            if (-not (Test-Path $DestinationDirectory)) {
+                New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
+                Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
+            }
+
             # Check if the destination file exists
             if (Test-Path $DestinationFilePath) {
                 # Get the destination file object
@@ -67,13 +74,6 @@ foreach ($Directory in $Directories) {
                 # Compare creation and modified dates
                 if ($SourceFile.CreationTime -eq $DestinationFile.CreationTime) {
                     if ($SourceFile.LastWriteTime -gt $DestinationFile.LastWriteTime) {
-                        # Ensure destination directory exists
-                        $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
-                        if (-not (Test-Path $DestinationDirectory)) {
-                            New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
-                            Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
-                        }
-
                         # Measure the time taken for the transfer
                         $startTime = Get-Date
                         try {
@@ -134,13 +134,6 @@ foreach ($Directory in $Directories) {
                     Write-Host "Skipped (creation dates differ, new empty profile likely created, resolve manually.): $DestinationFilePath" -ForegroundColor Yellow
                 }
             } else {
-                # Ensure destination directory exists
-                $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
-                if (-not (Test-Path $DestinationDirectory)) {
-                    New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
-                    Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
-                }
-
                 # Measure the time taken for the transfer
                 $startTime = Get-Date
                 try {
