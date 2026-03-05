@@ -28,7 +28,7 @@ Key Enhancements in V2:
 
 Parameters: 
 $max_jobs: The maximum number of parallel jobs to run.
-$mtreads: Change this to the number of threads to use for each robocopy job
+$mthreads: Change this to the number of threads to use for each robocopy job
 $src: Change this to a directory which contains files and/or subdirectories to be copied in parallel 
 $dest: Change this to where you want to backup your files to
 $EnableLogging: Set to $true for normal logging, $false for silent/no-logging mode (A/B testing)
@@ -64,17 +64,17 @@ Expected Performance Impact:
 
 # User Editable Variables:
 $max_jobs = 12              # Change this to the number of parallel Robocopy jobs to run 
-$mtreads = 128               # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
-$src = "Z:\"          # Set $src to a the local folder or share from which you want to copy the data
-$dest = "C:\txtest"         # Set $dest to a local folder or share to which you want to copy the data
-$EnableLogging = $false     # Set to $true for normal logging, $false for silent/no-logging mode (A/B Testing)
+$mthreads = 128              # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
+$src = "X:\resilio\GitSync\local\unifi"          # Set $src to a the local folder or share from which you want to copy the data
+$dest = "W:\destination\unifi"         # Set $dest to a local folder or share to which you want to copy the data
+$EnableLogging = $true     # Set to $true for normal logging, $false for silent/no-logging mode (A/B Testing)
 
 # Display current configuration
 Write-Host "=== Robocopy Booster V2 - Configuration ===" -ForegroundColor Cyan
 Write-Host "Source Path: $src" -ForegroundColor White
 Write-Host "Destination Path: $dest" -ForegroundColor White
 Write-Host "Max Parallel Jobs: $max_jobs" -ForegroundColor White
-Write-Host "Threads per Job: $mtreads" -ForegroundColor White
+Write-Host "Threads per Job: $mthreads" -ForegroundColor White
 Write-Host "Logging Mode: $(if($EnableLogging){'Enabled (Normal)'}else{'Disabled (Silent)'})" -ForegroundColor $(if($EnableLogging){'Green'}else{'Yellow'})
 Write-Host "=============================================" -ForegroundColor Cyan
 
@@ -115,17 +115,17 @@ if ($rootFiles.Count -gt 0) {
     Write-Host "Creating job for root directory files..." -ForegroundColor Yellow
     
     $RootScriptBlock = {
-        param($src, $dest, $mtreads, $EnableLogging)
+        param($src, $dest, $mthreads, $EnableLogging)
         
         # Build robocopy command for root files only (not subdirectories)
         if ($EnableLogging) {
             # Normal logging mode - copy only files, not subdirectories
             Write-Host "Processing Root Files (Normal): $(Split-Path $src -Leaf)" -ForegroundColor White
-            $result = robocopy $src $dest *.* /COPY:DAT /R:1 /W:1 /MT:$mtreads
+            $result = robocopy $src $dest /LEV:1 /COPY:DAT /R:1 /W:1 /MT:$mthreads
         } else {
             # Silent/no-logging mode for performance testing - copy only files, not subdirectories
             Write-Host "Processing Root Files (Silent): $(Split-Path $src -Leaf)" -ForegroundColor Gray
-            $result = robocopy $src $dest *.* /COPY:DAT /R:0 /W:0 /MT:$mtreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
+            $result = robocopy $src $dest /LEV:1 /COPY:DAT /R:0 /W:0 /MT:$mthreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
         }
         
         # Return job completion info
@@ -146,14 +146,14 @@ if ($rootFiles.Count -gt 0) {
     }
     
     # Start the root files job
-    $rootJob = Start-Job -ScriptBlock $RootScriptBlock -ArgumentList $src, $dest, $mtreads, $EnableLogging
+    $rootJob = Start-Job -ScriptBlock $RootScriptBlock -ArgumentList $src, $dest, $mthreads, $EnableLogging
     $allJobs += $rootJob
 }
 
 # Process subdirectories in parallel
 $directories | ForEach-Object {
     $ScriptBlock = {
-        param($name, $src, $dest, $mtreads, $EnableLogging)
+        param($name, $src, $dest, $mthreads, $EnableLogging)
         
         # Remove the final character from $name if it is a backslash
         if ($name.EndsWith("\")) {
@@ -166,11 +166,11 @@ $directories | ForEach-Object {
         if ($EnableLogging) {
             # Normal logging mode
             Write-Host "Processing (Normal): $name" -ForegroundColor White
-            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:1 /W:1 /MT:$mtreads
+            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:1 /W:1 /MT:$mthreads
         } else {
             # Silent/no-logging mode for performance testing
             Write-Host "Processing (Silent): $name" -ForegroundColor Gray
-            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:0 /W:0 /MT:$mtreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
+            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:0 /W:0 /MT:$mthreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
         }
         
         # Return job completion info
@@ -191,64 +191,37 @@ $directories | ForEach-Object {
     }
     
     # Job throttling - wait if we have too many running jobs
-    $runningJobs = Get-Job -State "Running"
-    while ($runningJobs.Count -ge $max_jobs) {
-        Start-Sleep -Milliseconds 250  # Reduced sleep time for better responsiveness
-        $runningJobs = Get-Job -State "Running"
-        
-        # Process completed jobs
-        $completedJobs = Get-Job -State "Completed"
-        if ($completedJobs.Count -gt 0) {
-            $completedJobs | Receive-Job | Out-Null
-            $completedJobs | Remove-Job
-        }
+    while (@($allJobs | Where-Object { $_.State -eq "Running" }).Count -ge $max_jobs) {
+        Start-Sleep -Milliseconds 250
     }
     
-    # Clean up completed jobs before starting new one
-    Get-Job -State "Completed" | Receive-Job | Out-Null
-    Remove-Job -State "Completed"
-      # Start new job
-    $newJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $_.Name, $src, $dest, $mtreads, $EnableLogging
+    # Start new job
+    $newJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $_.Name, $src, $dest, $mthreads, $EnableLogging
     $allJobs += $newJob
 }
 
 # Wait for all jobs to complete and collect results
 Write-Host "Waiting for all jobs to complete..." -ForegroundColor Cyan
-$jobResults = @()
-
-# Calculate total expected jobs
-$totalExpectedJobs = $directories.Count + $(if($rootFiles.Count -gt 0){1}else{0})
+$totalExpectedJobs = $allJobs.Count
 Write-Host "Total jobs to process: $totalExpectedJobs" -ForegroundColor Cyan
 
-While (Get-Job -State "Running") { 
-    # Show progress
-    $runningJobs = (Get-Job -State "Running").Count
-    $completedJobs = (Get-Job -State "Completed").Count
+while (@($allJobs | Where-Object { $_.State -eq "Running" }).Count -gt 0) {
+    $runningCount = @($allJobs | Where-Object { $_.State -eq "Running" }).Count
+    $completedCount = @($allJobs | Where-Object { $_.State -ne "Running" }).Count
     
     if ($totalExpectedJobs -gt 0) {
-        $percentComplete = [math]::Round(($completedJobs / $totalExpectedJobs) * 100, 1)
-        Write-Progress -Activity "Processing Robocopy Jobs" -Status "Running: $runningJobs, Completed: $completedJobs of $totalExpectedJobs" -PercentComplete $percentComplete
-    }
-    
-    # Process completed jobs
-    $completed = Get-Job -State "Completed"
-    if ($completed.Count -gt 0) {
-        $jobResults += $completed | Receive-Job
-        $completed | Remove-Job
+        $percentComplete = [math]::Round(($completedCount / $totalExpectedJobs) * 100, 1)
+        Write-Progress -Activity "Processing Robocopy Jobs" -Status "Running: $runningCount, Completed: $completedCount of $totalExpectedJobs" -PercentComplete $percentComplete
     }
     
     Start-Sleep -Seconds 1
 }
 
-# Process any remaining completed jobs
-$remaining = Get-Job -State "Completed"
-if ($remaining.Count -gt 0) {
-    $jobResults += $remaining | Receive-Job
-    $remaining | Remove-Job
-}
+Write-Progress -Activity "Processing Robocopy Jobs" -Completed
 
-# Clean up any remaining jobs
-Get-Job | Remove-Job -Force
+# Collect all results and clean up
+$jobResults = @($allJobs | Receive-Job)
+$allJobs | Remove-Job -Force
 
 # Calculate execution time and display results
 $tend = Get-Date 
@@ -261,13 +234,13 @@ Write-Host "Root Files Job: $(if($rootFiles.Count -gt 0){"Yes ($($rootFiles.Coun
 Write-Host "Total Jobs Executed: $totalExpectedJobs" -ForegroundColor White
 Write-Host "Logging Mode Used: $(if($EnableLogging){'Normal'}else{'Silent'})" -ForegroundColor $(if($EnableLogging){'Green'}else{'Yellow'})
 Write-Host "Max Parallel Jobs: $max_jobs" -ForegroundColor White
-Write-Host "Threads per Job: $mtreads" -ForegroundColor White
+Write-Host "Threads per Job: $mthreads" -ForegroundColor White
 
 # Display job results summary
 if ($jobResults.Count -gt 0) {
-    $successfulJobs = ($jobResults | Where-Object { $_.ExitCode -le 3 }).Count
-    $warningJobs = ($jobResults | Where-Object { $_.ExitCode -gt 3 -and $_.ExitCode -lt 8 }).Count
-    $errorJobs = ($jobResults | Where-Object { $_.ExitCode -ge 8 }).Count
+    $successfulJobs = @($jobResults | Where-Object { $_.ExitCode -le 3 }).Count
+    $warningJobs = @($jobResults | Where-Object { $_.ExitCode -gt 3 -and $_.ExitCode -lt 8 }).Count
+    $errorJobs = @($jobResults | Where-Object { $_.ExitCode -ge 8 }).Count
     
     Write-Host "`nJob Results Summary:" -ForegroundColor Cyan
     Write-Host "  Successful: $successfulJobs" -ForegroundColor Green
