@@ -55,4 +55,4 @@ By using any content from this repository, you acknowledge that you do so at you
 - [ANF Move AVD Profiles](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Move%20AVD%20Profiles)
     - Migrates FSLogix AVD (Azure Virtual Desktop) profiles from existing SMB shares to Azure NetApp Files SMB shares with intelligent conflict resolution and profile-in-use detection for safe cutover operations.
 - [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
-    - Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
+    - Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count. Includes V2 with A/B testing capabilities for logging vs no-logging performance comparison.

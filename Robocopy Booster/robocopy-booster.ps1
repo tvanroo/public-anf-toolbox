@@ -46,9 +46,9 @@ TotalSeconds    16.2536195
 
 
 # User Editable Variables:
-$max_jobs = 16          # Change this to the number of parallel Robocopy jobs to run 
-$mtreads = 16           # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
-$src = "Z:\txtest"      # Set $src to a the local folder or share from which you want to copy the data
+$max_jobs = 12          # Change this to the number of parallel Robocopy jobs to run 
+$mtreads = 128           # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
+$src = "Z:\"      # Set $src to a the local folder or share from which you want to copy the data
 $dest = "C:\txtest"     # Set $dest to a local folder or share to which you want to copy the data
 
 # Script:
