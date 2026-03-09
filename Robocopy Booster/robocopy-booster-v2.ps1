@@ -14,16 +14,16 @@ https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-Enhanced version of the Robocopy Booster that includes A/B testing capabilities for logging vs no-logging modes.
+Enhanced version of the Robocopy Booster with logging control and per-job speed reporting.
 This script runs parallel robocopy commands as PowerShell Jobs to speed up tiny file migrations. 
-The script includes a flag to switch between normal logging and silent/no-logging modes for performance testing.
+The script includes a flag to switch between normal logging and silent/no-logging modes.
 The script handles both files in the root directory and subdirectories, processing them in parallel for optimal performance.
 
 Key Enhancements in V2:
-- Added $EnableLogging flag for A/B testing between logging and no-logging modes
+- Added $EnableLogging flag to toggle logging on or off
 - Silent mode uses switches: /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
 - Improved error handling and reduced retry/wait times (/R:0 /W:0)
-- Performance optimized for maximum throughput testing
+- Per-job transfer speed reporting (MB/s) when logging is enabled
 - Handles both root directory files and subdirectories in parallel
 
 Parameters: 
@@ -31,7 +31,7 @@ $max_jobs: The maximum number of parallel jobs to run.
 $mthreads: Change this to the number of threads to use for each robocopy job
 $src: Change this to a directory which contains files and/or subdirectories to be copied in parallel 
 $dest: Change this to where you want to backup your files to
-$EnableLogging: Set to $true for normal logging, $false for silent/no-logging mode (A/B testing)
+$EnableLogging: Set to $true for normal logging, $false for silent/no-logging mode
 
 Processing Logic:
 - Root directory files are copied as a single job (if any exist)
@@ -55,19 +55,15 @@ TotalSeconds    39.8715172
 Jobs/Threads 	16/16
 TotalSeconds    16.2536195
 
-Expected Performance Impact:
-- No-logging mode should show 5-15% performance improvement
-- Larger datasets with many small files will see more benefit
-- Network-bound transfers may see minimal improvement
 
 #>
 
 # User Editable Variables:
 $max_jobs = 12              # Change this to the number of parallel Robocopy jobs to run 
 $mthreads = 128              # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
-$src = "X:\resilio\GitSync\local\unifi"          # Set $src to a the local folder or share from which you want to copy the data
-$dest = "W:\destination\unifi"         # Set $dest to a local folder or share to which you want to copy the data
-$EnableLogging = $true     # Set to $true for normal logging, $false for silent/no-logging mode (A/B Testing)
+$src = "X:\source"          # Set $src to a the local folder or share from which you want to copy the data
+$dest = "W:\destination"         # Set $dest to a local folder or share to which you want to copy the data
+$EnableLogging = $true     # Set to $true for normal logging, $false for silent/no-logging mode
 
 # Display current configuration
 Write-Host "=== Robocopy Booster V2 - Configuration ===" -ForegroundColor Cyan
@@ -132,16 +128,29 @@ if ($rootFiles.Count -gt 0) {
         $exitCode = $LASTEXITCODE
         $timestamp = Get-Date -Format 'HH:mm:ss'
         
+        # Parse speed from robocopy output when logging is enabled
+        $speed = ""
+        if ($EnableLogging -and $result) {
+            $speedLine = $result | Where-Object { $_ -match "Bytes/sec" } | Select-Object -First 1
+            if ($speedLine -match "([\d.,]+)\s+Bytes/sec") {
+                $bytesPerSec = ($Matches[1]) -replace '[,.]', ''
+                $mbPerSec = [math]::Round([double]$bytesPerSec / 1MB, 2)
+                $speed = "$mbPerSec MB/s"
+            }
+        }
+        $speedInfo = if ($speed) { " - $speed" } else { "" }
+        
         if ($exitCode -le 3) {
-            Write-Host "[$timestamp] Completed: Root Files (Exit Code: $exitCode)" -ForegroundColor Green
+            Write-Host "[$timestamp] Completed: Root Files (Exit Code: $exitCode)$speedInfo" -ForegroundColor Green
         } else {
-            Write-Host "[$timestamp] Warning/Error: Root Files (Exit Code: $exitCode)" -ForegroundColor Yellow
+            Write-Host "[$timestamp] Warning/Error: Root Files (Exit Code: $exitCode)$speedInfo" -ForegroundColor Yellow
         }
         
         return @{
             Name = "Root Files"
             ExitCode = $exitCode
             Timestamp = $timestamp
+            Speed = $speed
         }
     }
     
@@ -177,16 +186,29 @@ $directories | ForEach-Object {
         $exitCode = $LASTEXITCODE
         $timestamp = Get-Date -Format 'HH:mm:ss'
         
+        # Parse speed from robocopy output when logging is enabled
+        $speed = ""
+        if ($EnableLogging -and $result) {
+            $speedLine = $result | Where-Object { $_ -match "Bytes/sec" } | Select-Object -First 1
+            if ($speedLine -match "([\d.,]+)\s+Bytes/sec") {
+                $bytesPerSec = ($Matches[1]) -replace '[,.]', ''
+                $mbPerSec = [math]::Round([double]$bytesPerSec / 1MB, 2)
+                $speed = "$mbPerSec MB/s"
+            }
+        }
+        $speedInfo = if ($speed) { " - $speed" } else { "" }
+        
         if ($exitCode -le 3) {
-            Write-Host "[$timestamp] Completed: $name (Exit Code: $exitCode)" -ForegroundColor Green
+            Write-Host "[$timestamp] Completed: $name (Exit Code: $exitCode)$speedInfo" -ForegroundColor Green
         } else {
-            Write-Host "[$timestamp] Warning/Error: $name (Exit Code: $exitCode)" -ForegroundColor Yellow
+            Write-Host "[$timestamp] Warning/Error: $name (Exit Code: $exitCode)$speedInfo" -ForegroundColor Yellow
         }
         
         return @{
             Name = $name
             ExitCode = $exitCode
             Timestamp = $timestamp
+            Speed = $speed
         }
     }
     
@@ -249,10 +271,3 @@ if ($jobResults.Count -gt 0) {
 }
 
 Write-Host "=====================================" -ForegroundColor Cyan
-
-# A/B Testing recommendation
-Write-Host "`nA/B Testing Recommendation:" -ForegroundColor Magenta
-Write-Host "To compare performance, run this script twice:" -ForegroundColor White
-Write-Host "1. Set `$EnableLogging = `$true (Normal mode)" -ForegroundColor White
-Write-Host "2. Set `$EnableLogging = `$false (Silent mode)" -ForegroundColor White
-Write-Host "Compare the 'Total Execution Time' to measure performance difference." -ForegroundColor White
