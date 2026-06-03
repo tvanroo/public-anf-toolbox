@@ -14,3 +14,10 @@ By using any content from this repository, you acknowledge that you do so at you
 # Download Script:
 [Performance](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1)
     - Allocates _all_ pool throughput to volumes based on historical average throughput usage metrics. Result: Volume performance is governed by historical throughput usage.
+
+## GA Safety Notes
+
+- The script defaults to `$testMode = "Yes"`, so it reports planned throughput allocation without updating volumes.
+- Live updates require `$testMode = "No"`.
+- Auto QoS to Manual conversion is previewed in test mode and only executed when both `$ConvertToManualMode = "Yes"` and `$testMode = "No"`.
+- Re-runs compare the current volume throughput values and only apply changes when the calculated target differs.

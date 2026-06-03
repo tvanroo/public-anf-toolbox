@@ -71,16 +71,16 @@ if ($capacityPoolQosType -eq "Manual" -or $ConvertToManualMode -eq "Yes" -or $te
 
 # If QoS is Auto and ConvertToManualMode is set to "Yes", convert the Capacity Pool to Manual
 if ($capacityPoolQosType -eq "Auto" -and $ConvertToManualMode -eq "Yes") {
-    Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
-    $anfPool | Update-AzNetAppFilesPool -QosType Manual  > $null
-    $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-    $finalData | ForEach-Object {
-        if ($_.ShortName -ne "unallocated") {
-            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $_.ShortName
-            $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps 1 > $null
-        }
+    if ($testMode -eq "Yes") {
+        Write-Host "TEST MODE: Capacity Pool QoS would be converted to Manual" -ForegroundColor Yellow
+    } else {
+        Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
+        $anfPool | Update-AzNetAppFilesPool -QosType Manual  > $null
+        $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
+        $capacityPoolQosType = $anfPool.QosType
+        $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
+        Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
     }
-    Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
 }   
 
 

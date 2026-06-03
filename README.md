@@ -12,6 +12,10 @@ This repository is published publicly as a resource for other Azure NetApp Files
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
+## Script Safety Defaults
+
+Most mutating scripts default to test or preview mode and require an explicit opt-in before changing Azure resources or source files. Review each script folder's README for the exact `$testMode`, `$previewOnly`, `$overwriteOutput`, `-DryRun`, or `-DeleteSourceAfterVerifiedCopy` behavior before running.
+
 # Index of Resources
 
 - [Awesome Azure NetApp Files (ANF) - A curated list of Azure NetApp Files Resources](https://github.com/ANFTechTeam/awesome-anf)

@@ -55,7 +55,7 @@ Azure Automation Account Setup Requirements:
    - ANF_MaximumVolumeGrowthPercent: Max growth % (int, default: 100)
    - ANF_MinimumFreeSpaceGiB: Min free space in GiB (int, default: 10)
    - ANF_CapacityLookBackHours: Metrics lookback hours (int, default: 24)
-   - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "No")
+   - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
    - ANF_VolumeMinThroughputMap: JSON string mapping volume names to minimum throughput
      Example: '{"vol1":10,"vol2":15,"vol3":5}' - sets minimum MiB/s per volume
    - ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 1000)
@@ -121,10 +121,10 @@ foreach ($module in $requiredModules) {
     # Get variables from Automation Account if available, otherwise use defaults
     $tenantId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_TenantId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
     $subscriptionId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_SubscriptionId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
-    $resourceGroupName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction SilentlyContinue } else { "vanRoojen-nerdio-anf" }
-    $anfAccountName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction SilentlyContinue } else { "vanRoojen-nerdio-anf-account" }
+    $resourceGroupName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction SilentlyContinue } else { "example-rg" }
+    $anfAccountName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction SilentlyContinue } else { "example-anf-acct" }
     
-    $anfPoolName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction SilentlyContinue } else { "ultra-pool" }
+    $anfPoolName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction SilentlyContinue } else { "example-anf-pool" }
     
     # Capacity Management Settings (can be overridden with Automation Variables)
     $capacityResizeThreshold = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_CapacityResizeThreshold" -ErrorAction SilentlyContinue } else { $null }
@@ -163,14 +163,13 @@ foreach ($module in $requiredModules) {
     $capacityLookBackHours = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_CapacityLookBackHours" -ErrorAction SilentlyContinue } else { $null }
     if (-not $capacityLookBackHours) { $capacityLookBackHours = 24 }               # Hours to look back for capacity metrics (24 hours)
     
-    # Test mode - for Automation Account, this should typically be "No" (live mode)
-    # For local testing, default to "Yes" (test mode) for safety
+    # Test mode defaults to "Yes" for safety. Set ANF_TestMode to "No" only after reviewing the planned changes.
     $testMode = if ($runningInAutomation) { 
         Get-AutomationVariable -Name "ANF_TestMode" -ErrorAction SilentlyContinue 
     } else { 
         "Yes"  # Default to test mode for local execution
     }
-    if (-not $testMode) { $testMode = if ($runningInAutomation) { "No" } else { "Yes" } }
+    if (-not $testMode) { $testMode = "Yes" }
     
 # Input validation and configuration display
 Write-Output "=== ANF Capacity Autoscale Configuration ==="
@@ -187,9 +186,6 @@ if ($volumeMinThroughputMap.Count -gt 0) {
     Write-Output "Volume Min Throughput Map: $($volumeMinThroughputMap.Count) volumes configured"
 }
 Write-Output "Max Throughput per TiB: $maxThroughputPerTiB MiB/s"
-# Force test mode for CLI testing
-$testMode = "No"
-
 
 if ($testMode -eq "Yes") {
     Write-Output "Running in TEST MODE - no changes will be made"
@@ -200,20 +196,18 @@ if ($testMode -eq "Yes") {
     throw "Invalid test mode configuration"
 }
 
-# Validate required variables for Automation Account
-if ($runningInAutomation) {
-    if (-not $resourceGroupName -or $resourceGroupName -eq "example-rg") {
-        Write-Error "ANF_ResourceGroupName automation variable must be set"
-        throw "Missing required automation variable: ANF_ResourceGroupName"
-    }
-    if (-not $anfAccountName -or $anfAccountName -eq "example-anf-acct") {
-        Write-Error "ANF_AccountName automation variable must be set"
-        throw "Missing required automation variable: ANF_AccountName"
-    }
-    if (-not $anfPoolName -or $anfPoolName -eq "example-anf-pool") {
-        Write-Error "ANF_PoolName automation variable must be set"
-        throw "Missing required automation variable: ANF_PoolName"
-    }
+# Validate required variables
+if (-not $resourceGroupName -or $resourceGroupName -eq "example-rg") {
+    Write-Error "ANF_ResourceGroupName must be set before running this script"
+    throw "Missing required variable: ANF_ResourceGroupName"
+}
+if (-not $anfAccountName -or $anfAccountName -eq "example-anf-acct") {
+    Write-Error "ANF_AccountName must be set before running this script"
+    throw "Missing required variable: ANF_AccountName"
+}
+if (-not $anfPoolName -or $anfPoolName -eq "example-anf-pool") {
+    Write-Error "ANF_PoolName must be set before running this script"
+    throw "Missing required variable: ANF_PoolName"
 }
 
 # Connect to Azure using Managed Identity (for Automation Account) or device code login

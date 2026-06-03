@@ -23,6 +23,7 @@ This script automates the collection of Azure NetApp Files volume throughput met
 - **High Resolution**: 5-minute data granularity for detailed analysis
 - **Multiple Metrics**: Collects ReadThroughput, WriteThroughput, TotalThroughput, and OtherThroughput
 - **CSV Export**: Exports data in a structured CSV format for easy analysis
+- **Output Protection**: Existing CSV files are not overwritten unless `$overwriteOutput = "Yes"`
 - **Configurable Targeting**: Can target specific volumes or entire capacity pools
 - **No Volume Modifications**: Read-only operation - does not modify any ANF resources
 
@@ -42,6 +43,7 @@ $resourceGroupName = "example-rg"                       # Resource group name
 $anfAccountName = "example-anf-acct"                    # ANF account name
 $anfPoolName = "example-anf-pool"                       # ANF pool name
 $volumeName = ""                                        # Specific volume (empty = all volumes)
+$overwriteOutput = "No"                                 # Protect existing CSV output
 ```
 
 ## Script Configuration
@@ -92,4 +94,5 @@ The exported CSV contains the following columns:
 - The script only collects existing metrics data - if a volume is new or has been inactive, less than 30 days of data may be available
 - Authentication to Azure is required before running the script
 - The script is read-only and does not modify any ANF resources
+- Existing CSV output is protected by default. Set `$overwriteOutput = "Yes"` or choose a new `$outputPath` for re-runs.
 - Large datasets may take several minutes to collect and export

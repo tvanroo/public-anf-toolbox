@@ -58,6 +58,7 @@ $volumeName = ""                                        # Specific volume name (
 $lookBackDays = 30                                      # Number of days to look back for metrics (30 days)
 $outputPath = "C:\temp\ANF-throughput-metrics.csv"     # Output CSV file path
 $timeGrainMinutes = 5                                   # Time grain in minutes (5-minute resolution)
+$overwriteOutput = "No"                                 # Output overwrite selector: "Yes", "No"  No protects existing CSV files
 
 # Validate configuration variables
 Write-Host "Validating configuration..." -ForegroundColor Cyan
@@ -79,6 +80,17 @@ if ($anfAccountName -eq "example-anf-acct" -or [string]::IsNullOrEmpty($anfAccou
 
 if ($anfPoolName -eq "example-anf-pool" -or [string]::IsNullOrEmpty($anfPoolName)) {
     Write-Host "ERROR: Please update the anfPoolName variable with your actual ANF Pool name" -ForegroundColor Red
+    exit 1
+}
+
+if ($overwriteOutput -ne "Yes" -and $overwriteOutput -ne "No") {
+    Write-Host "ERROR: overwriteOutput must be set to Yes or No" -ForegroundColor Red
+    exit 1
+}
+
+if ((Test-Path -Path $outputPath) -and $overwriteOutput -ne "Yes") {
+    Write-Host "ERROR: Output file already exists: $outputPath" -ForegroundColor Red
+    Write-Host "Set overwriteOutput to Yes or choose a different outputPath before re-running." -ForegroundColor Yellow
     exit 1
 }
 
@@ -132,6 +144,7 @@ Write-Host "  Volume: $(if ($volumeName) { $volumeName } else { 'All volumes in 
 Write-Host "  Look-back period: $lookBackDays days" -ForegroundColor White
 Write-Host "  Resolution: $timeGrainMinutes minutes" -ForegroundColor White
 Write-Host "  Output file: $outputPath" -ForegroundColor White
+Write-Host "  Overwrite output: $overwriteOutput" -ForegroundColor White
 
 try {
     # Get the Azure NetApp Files account details
@@ -166,7 +179,7 @@ try {
     # Calculate time range
     $endTime = Get-Date
     $startTime = $endTime.AddDays(-$lookBackDays)
-    $timeGrain = "00:0$($timeGrainMinutes):00"
+    $timeGrain = New-TimeSpan -Minutes $timeGrainMinutes
 
     Write-Host "Collecting metrics from $($startTime.ToString('yyyy-MM-dd HH:mm:ss')) to $($endTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Cyan
 
@@ -220,7 +233,14 @@ try {
         }
 
         # Export data to CSV
-        $allMetricsData | Sort-Object Timestamp, VolumeName, MetricName | Export-Csv -Path $outputPath -NoTypeInformation -Force
+        $exportParams = @{
+            Path = $outputPath
+            NoTypeInformation = $true
+        }
+        if ($overwriteOutput -eq "Yes") {
+            $exportParams.Force = $true
+        }
+        $allMetricsData | Sort-Object Timestamp, VolumeName, MetricName | Export-Csv @exportParams
 
         Write-Host "`nMetrics collection completed successfully!" -ForegroundColor Green
         Write-Host "Total data points collected: $($allMetricsData.Count)" -ForegroundColor Cyan

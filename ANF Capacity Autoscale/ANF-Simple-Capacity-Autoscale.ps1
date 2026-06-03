@@ -26,7 +26,7 @@ Required Automation Variables:
    - ANF_MinimumFreeSpacePercent: Min free space % (int, default: 20)
    - ANF_MinimumFreeSpaceGiB: Min free space in GiB (int, default: 100)
    - ANF_MaxThroughputPerTiB: Max throughput per TiB (int, default: 1000)
-   - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "No")
+   - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
 
 #>
 
@@ -43,10 +43,10 @@ try {
     # Required variables
     $tenantId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_TenantId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
     $subscriptionId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_SubscriptionId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
-    $resourceGroupName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction SilentlyContinue } else { "vanRoojen-nerdio-anf" }
-    $anfAccountName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction SilentlyContinue } else { "vanRoojen-nerdio-anf-account" }
-    $anfPoolName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction SilentlyContinue } else { "ultra-pool" }
-    $volumeName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_VolumeName" -ErrorAction SilentlyContinue } else { "standard" }
+    $resourceGroupName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction SilentlyContinue } else { "example-rg" }
+    $anfAccountName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction SilentlyContinue } else { "example-anf-acct" }
+    $anfPoolName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction SilentlyContinue } else { "example-anf-pool" }
+    $volumeName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_VolumeName" -ErrorAction SilentlyContinue } else { "example-anf-volume" }
     
     # Capacity Management Settings
     $minimumFreeSpacePercent = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MinimumFreeSpacePercent" -ErrorAction SilentlyContinue } else { $null }
@@ -62,13 +62,13 @@ try {
     $maxThroughputPerTiB = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MaxThroughputPerTiB" -ErrorAction SilentlyContinue } else { $null }
     if (-not $maxThroughputPerTiB) { $maxThroughputPerTiB = 1000 }
     
-    # Test mode
+    # Test mode defaults to "Yes" for safety. Set ANF_TestMode to "No" only after reviewing the planned changes.
     $testMode = if ($runningInAutomation) { 
         Get-AutomationVariable -Name "ANF_TestMode" -ErrorAction SilentlyContinue 
     } else { 
         "Yes"  # Default to test mode for local execution
     }
-    if (-not $testMode) { $testMode = if ($runningInAutomation) { "No" } else { "Yes" } }
+    if (-not $testMode) { $testMode = "Yes" }
     
 } catch {
     Write-Error "Failed to load configuration: $_"
@@ -87,6 +87,28 @@ Write-Output "Volume: $volumeName"
 Write-Output "Minimum Free Space: $minimumFreeSpacePercent% / $minimumFreeSpaceGiB GiB"
 Write-Output "Max Throughput per TiB: $maxThroughputPerTiB MiB/s"
 Write-Output "Test Mode: $testMode"
+
+if ($testMode -ne "Yes" -and $testMode -ne "No") {
+    Write-Error "ANF_TestMode must be set to Yes or No"
+    exit 1
+}
+
+if (-not $resourceGroupName -or $resourceGroupName -eq "example-rg") {
+    Write-Error "ANF_ResourceGroupName must be set before running this script"
+    exit 1
+}
+if (-not $anfAccountName -or $anfAccountName -eq "example-anf-acct") {
+    Write-Error "ANF_AccountName must be set before running this script"
+    exit 1
+}
+if (-not $anfPoolName -or $anfPoolName -eq "example-anf-pool") {
+    Write-Error "ANF_PoolName must be set before running this script"
+    exit 1
+}
+if (-not $volumeName -or $volumeName -eq "example-anf-volume") {
+    Write-Error "ANF_VolumeName must be set before running this script"
+    exit 1
+}
 
 # Authentication
 Write-Output ""

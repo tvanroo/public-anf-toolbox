@@ -13,3 +13,10 @@ By using any content from this repository, you acknowledge that you do so at you
 # Download Script:
 [Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1)
     - Quick build/teardown of ANF Account, Capacity Pool, and Volume(s). Variables can be edited to match deployment requirements.
+
+## GA Safety Notes
+
+- The script defaults to `$previewOnly = "Yes"`, which lists create or delete actions without changing Azure resources.
+- Live create/delete actions require setting `$previewOnly = "No"`.
+- Delete mode also requires typing the exact confirmation string `DELETE <account>/<pool>` before volumes, the pool, or the ANF account are removed.
+- Create mode remains idempotent for existing accounts, pools, and volume names; existing resources are skipped rather than overwritten.

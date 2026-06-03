@@ -46,6 +46,7 @@ $anfAccountName =           "example-anf-acct"                      # Azure NetA
 $initialanfPoolName =       "example-anf-pool"                      # Name of the currently used pool for the initial run of this script, if the current pool name is NOT either the $weekendPoolName or $weekdayPoolName
 $weekendPoolName =          "example-anf-pool-weekend"              # Azure NetApp Files capacity pool name
 $weekdayPoolName =          "example-anf-pool-weekday"              # Azure NetApp Files capacity pool name
+$testMode =                 "Yes"                                   # Test Mode Selector: "Yes", "No"  Yes lists actions, No makes changes
 
 # Begin Script
 $currentDay =               Get-Date -Format "dddd"
@@ -60,6 +61,71 @@ $currentTime =              Get-Date -Format "HH:mm"
 if (-not (Get-AzContext)) {
     Connect-AzAccount -TenantId $tenantId
     Get-AzContext
+}
+
+if ($testMode -eq "Yes") {
+    Write-Host "Script is running in test mode. Pool create, volume move, and pool delete actions will not be performed." -ForegroundColor Green
+} elseif ($testMode -eq "No") {
+    Write-Host "Script is running in ***live*** mode. Pool create, volume move, and pool delete actions ***will*** be performed." -ForegroundColor Yellow
+} else {
+    Write-Host "Test Mode is not set to Yes or No. Exiting Script." -ForegroundColor Red
+    exit
+}
+
+function New-ScalingPool {
+    param(
+        [Parameter(Mandatory = $true)]$PoolSpec,
+        [Parameter(Mandatory = $true)][string]$TargetPoolName
+    )
+
+    if ($testMode -eq "Yes") {
+        Write-Host "TEST MODE: Would create pool $TargetPoolName with service level $($PoolSpec.ServiceLevel) and size $($PoolSpec.Size)" -ForegroundColor Yellow
+        return [PSCustomObject]@{
+            Id = "test-mode:$TargetPoolName"
+            PoolId = "test-mode:$TargetPoolName"
+            Name = $TargetPoolName
+        }
+    }
+
+    if ($PoolSpec.CoolAccess -eq $True) {
+        Write-Host "Creating a new pool with Cool Access"
+        $null = New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $PoolSpec.Location -AccountName $anfAccountName -Name $TargetPoolName -PoolSize $PoolSpec.Size -ServiceLevel $PoolSpec.ServiceLevel -QosType $PoolSpec.QosType -CoolAccess -EncryptionType $PoolSpec.EncryptionType -Tag $PoolSpec.Tags
+    } else {
+        Write-Host "Creating a new pool without Cool Access"
+        $null = New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $PoolSpec.Location -AccountName $anfAccountName -Name $TargetPoolName -PoolSize $PoolSpec.Size -ServiceLevel $PoolSpec.ServiceLevel -QosType $PoolSpec.QosType -EncryptionType $PoolSpec.EncryptionType -Tag $PoolSpec.Tags
+    }
+
+    return Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $TargetPoolName
+}
+
+function Move-ScalingVolumes {
+    param(
+        [Parameter(Mandatory = $true)]$Volumes,
+        [Parameter(Mandatory = $true)][string]$CurrentPoolName,
+        [Parameter(Mandatory = $true)]$TargetPool,
+        [Parameter(Mandatory = $true)][string]$TargetPoolLabel
+    )
+
+    foreach ($volume in $Volumes) {
+        Write-Host "Moving volume $($volume.CreationToken) to the $TargetPoolLabel."
+        if ($testMode -eq "Yes") {
+            Write-Host "TEST MODE: Would move volume $($volume.CreationToken) from $CurrentPoolName to $($TargetPool.Name)" -ForegroundColor Yellow
+        } else {
+            Set-AzNetAppFilesVolumePool -ResourceGroupName $volume.ResourceGroupName -AccountName $anfAccountName -PoolName $CurrentPoolName -Name $volume.CreationToken -NewPoolResourceId $TargetPool.Id
+        }
+    }
+}
+
+function Remove-ScalingPool {
+    param(
+        [Parameter(Mandatory = $true)][string]$PoolName
+    )
+
+    if ($testMode -eq "Yes") {
+        Write-Host "TEST MODE: Would remove pool $PoolName" -ForegroundColor Yellow
+    } else {
+        Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $PoolName
+    }
 }
 
 # Clear variables
@@ -94,28 +160,16 @@ if ($validVolumeLists -eq 1) {
             $weekendPool.Name = $weekendPoolName
 
             # Create the new weekend pool replicating settings in the $initialPool
-            if ($weekendPool.CoolAccess -eq $True) {
-                Write-Host "Creating a new pool with Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekendPool.Location -AccountName $anfAccountName -Name $weekendPool.Name -PoolSize $weekendPool.Size -ServiceLevel $weekendPool.ServiceLevel -QosType $weekendPool.QosType -CoolAccess -EncryptionType $weekendPool.EncryptionType -Tag $weekendPool.Tags
-            } else {
-                Write-Host "Creating a new pool without Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekendPool.Location -AccountName $anfAccountName -Name $weekendPool.Name -PoolSize $weekendPool.Size -ServiceLevel $weekendPool.ServiceLevel -QosType $weekendPool.QosType -EncryptionType $weekendPool.EncryptionType -Tag $weekendPool.Tags
-            }
-
-            # Get new pool resource ID
-            $weekendPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekendPoolName
+            $weekendPool = New-ScalingPool -PoolSpec $weekendPool -TargetPoolName $weekendPoolName
             $weekendPool.PoolId
 
             # Get the volumes in the initial pool
             $initialVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $initialanfPoolName
 
             # Move the volumes to the weekend pool
-            foreach ($volume in $initialVolumes) {
-                Write-Host "Moving volume $($volume.Name) to the weekend pool."
-                Set-AzNetAppFilesVolumePool -ResourceGroupName $volume.ResourceGroupName -AccountName $anfAccountName -PoolName $initialanfPoolName -Name $volume.CreationToken -NewPoolResourceId $weekendPool.Id
-            }
+            Move-ScalingVolumes -Volumes $initialVolumes -CurrentPoolName $initialanfPoolName -TargetPool $weekendPool -TargetPoolLabel "weekend pool"
 
-            Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $initialanfPoolName
+            Remove-ScalingPool -PoolName $initialanfPoolName
 
         } else {
             Write-Host "It is not the weekend."
@@ -128,28 +182,16 @@ if ($validVolumeLists -eq 1) {
             $weekdayPool.Name = $weekdayPoolName
 
             # Create the new weekday pool replicating settings in the $initialPool
-            if ($weekdayPool.CoolAccess -eq $True) {
-                Write-Host "Creating a new pool with Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekdayPool.Location -AccountName $anfAccountName -Name $weekdayPool.Name -PoolSize $weekdayPool.Size -ServiceLevel $weekdayPool.ServiceLevel -QosType $weekdayPool.QosType -CoolAccess -EncryptionType $weekdayPool.EncryptionType -Tag $weekdayPool.Tags
-            } else {
-                Write-Host "Creating a new pool without Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekdayPool.Location -AccountName $anfAccountName -Name $weekdayPool.Name -PoolSize $weekdayPool.Size -ServiceLevel $weekdayPool.ServiceLevel -QosType $weekdayPool.QosType -EncryptionType $weekdayPool.EncryptionType -Tag $weekdayPool.Tags
-            }
-
-            # Get new pool resource ID
-            $weekdayPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekdayPoolName
+            $weekdayPool = New-ScalingPool -PoolSpec $weekdayPool -TargetPoolName $weekdayPoolName
             $weekdayPool.PoolId
 
             # Get the volumes in the initial pool
             $initialVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $initialanfPoolName
 
             # Move the volumes to the weekday pool
-            foreach ($volume in $initialVolumes) {
-                Write-Host "Moving volume $($volume.Name) to the weekday pool."
-                Set-AzNetAppFilesVolumePool -ResourceGroupName $volume.ResourceGroupName -AccountName $anfAccountName -PoolName $initialanfPoolName -Name $volume.CreationToken -NewPoolResourceId $weekdayPool.Id
-            }
+            Move-ScalingVolumes -Volumes $initialVolumes -CurrentPoolName $initialanfPoolName -TargetPool $weekdayPool -TargetPoolLabel "weekday pool"
 
-            Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $initialanfPoolName
+            Remove-ScalingPool -PoolName $initialanfPoolName
         }
     } elseif ($weekendVolumeList) {
         Write-Host "Weekend volume list is valid."
@@ -166,28 +208,16 @@ if ($validVolumeLists -eq 1) {
             $weekdayPool.Name = $weekdayPoolName
 
             # Create the new weekend pool replicating settings in the $initialPool
-            if ($weekdayPool.CoolAccess -eq $True) {
-                Write-Host "Creating a new pool with Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekdayPool.Location -AccountName $anfAccountName -Name $weekdayPoolName -PoolSize $weekdayPool.Size -ServiceLevel $weekdayPool.ServiceLevel -QosType $weekdayPool.QosType -CoolAccess -EncryptionType $weekdayPool.EncryptionType -Tag $weekdayPool.Tags
-            } else {
-                Write-Host "Creating a new pool without Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekdayPool.Location -AccountName $anfAccountName -Name $weekdayPoolName -PoolSize $weekdayPool.Size -ServiceLevel $weekdayPool.ServiceLevel -QosType $weekdayPool.QosType -EncryptionType $weekdayPool.EncryptionType -Tag $weekdayPool.Tags
-            }
-
-            # Get new pool resource ID
-            $weekdayPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekdayPoolName
+            $weekdayPool = New-ScalingPool -PoolSpec $weekdayPool -TargetPoolName $weekdayPoolName
             $weekdayPool.PoolId
 
             # Get the volumes in the initial pool
             $initialVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekendPoolName
 
             # Move the volumes to the weekend pool
-            foreach ($volume in $initialVolumes) {
-                Write-Host "Moving volume $($volume.Name) to the weekday pool."
-                Set-AzNetAppFilesVolumePool -ResourceGroupName $volume.ResourceGroupName -AccountName $anfAccountName -PoolName $weekendPoolName -Name $volume.CreationToken -NewPoolResourceId $weekdayPool.Id
-            }
+            Move-ScalingVolumes -Volumes $initialVolumes -CurrentPoolName $weekendPoolName -TargetPool $weekdayPool -TargetPoolLabel "weekday pool"
 
-            Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $weekendPoolName
+            Remove-ScalingPool -PoolName $weekendPoolName
         }
     } elseif ($weekdayVolumeList) {
         Write-Host "Weekday volume list is valid."
@@ -201,27 +231,15 @@ if ($validVolumeLists -eq 1) {
             $weekendPool.Name = $weekendPoolName
 
             # Create the new weekend pool replicating settings in the $initialPool
-            if ($weekendPool.CoolAccess -eq $True) {
-                Write-Host "Creating a new pool with Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekendPool.Location -AccountName $anfAccountName -Name $weekendPool.Name -PoolSize $weekendPool.Size -ServiceLevel $weekendPool.ServiceLevel -QosType $weekendPool.QosType -CoolAccess -EncryptionType $weekendPool.EncryptionType -Tag $weekendPool.Tags
-            } else {
-                Write-Host "Creating a new pool without Cool Access"
-                New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $weekendPool.Location -AccountName $anfAccountName -Name $weekendPool.Name -PoolSize $weekendPool.Size -ServiceLevel $weekendPool.ServiceLevel -QosType $weekendPool.QosType -EncryptionType $weekendPool.EncryptionType -Tag $weekendPool.Tags
-            }
-
-            # Get new pool resource ID
-            $weekendPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekendPoolName
+            $weekendPool = New-ScalingPool -PoolSpec $weekendPool -TargetPoolName $weekendPoolName
             $weekendPool.PoolId
 
             # Get the volumes in the initial pool
             $initialVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $weekdayPoolName
 
             # Move the volumes to the weekend pool
-            foreach ($volume in $initialVolumes) {
-                Write-Host "Moving volume $($volume.CreationToken) to the weekend pool."
-                Set-AzNetAppFilesVolumePool -ResourceGroupName $volume.ResourceGroupName -AccountName $anfAccountName -PoolName $weekdayPoolName -Name $volume.CreationToken -NewPoolResourceId $weekendPool.Id
-            }
-            Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $weekdayPoolName
+            Move-ScalingVolumes -Volumes $initialVolumes -CurrentPoolName $weekdayPoolName -TargetPool $weekendPool -TargetPoolLabel "weekend pool"
+            Remove-ScalingPool -PoolName $weekdayPoolName
 
         } else {
             Write-Host "It is a weekday and the weekday volume(s) are in place." -ForegroundColor Green

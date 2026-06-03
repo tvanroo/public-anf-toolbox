@@ -40,6 +40,7 @@ $anfPoolName =              "example-anfPool"                                   
 $offHoursTiBs =             1                                                       # TiB for off hours
 $onHoursTiBs =              2                                                       # TiB for on hours
 $MiBsperTiB =               128                                                     # MiB/s per TiB (*set to 16 for Standard, 64 for Premium, 128 for Ultra)
+$testMode =                 "Yes"                                                   # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes
 
 
 #variable conversions
@@ -67,6 +68,20 @@ $MiBsperTiB =               128                                                 
 # Get all volumes in the account
     $volumeList = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction SilentlyContinue
 
+    if ($testMode -eq "Yes") {
+        Write-Host "Script is running in test mode. Changes will not be made to the pool or volumes." -ForegroundColor Green
+    } elseif ($testMode -eq "No") {
+        Write-Host "Script is running in ***live*** mode. Changes ***will*** be made to the pool and volumes." -ForegroundColor Yellow
+    } else {
+        Write-Host "Test Mode is not set to Yes or No. Exiting Script." -ForegroundColor Red
+        exit
+    }
+
+    if (-not $volumeList -or $volumeList.Count -eq 0) {
+        Write-Host "No volumes found in Azure NetApp Files Capacity Pool `"$anfPoolName`". Exiting script." -ForegroundColor Red
+        exit
+    }
+
 # Calculate throughput allocation for each volume
     $offHoursMiBsperVolume = $offHoursMiBs / $volumeList.Count
     $onHoursMiBsperVolume = $onHoursMiBs / $volumeList.Count
@@ -76,28 +91,42 @@ $MiBsperTiB =               128                                                 
     $capacityPoolQosType = $anfPool.QosType
 # If QoS is Auto, convert the Capacity Pool to Manual
     if ($capacityPoolQosType -eq "Auto") {
-        Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
-        $anfPool | Update-AzNetAppFilesPool -QosType Manual > $null
-        $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-        Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
+        if ($testMode -eq "Yes") {
+            Write-Host "TEST MODE: Capacity Pool QoS would be converted to Manual" -ForegroundColor Yellow
+        } else {
+            Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
+            $anfPool | Update-AzNetAppFilesPool -QosType Manual > $null
+            $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
+            Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
+        }
     }   
 
 # If after hours or weekend
     if ($weekendDays -contains $currentDay -or $weekDays -notcontains $currentDay -or $currentTime -lt $dayStartTime -or $currentTime -ge $dayEndTime) {
         Write-Host "After hours or weekend"
+        Write-Host "Target pool size: $offHoursTiBs TiB; target throughput per volume: $offHoursMiBsperVolume MiB/s"
+        if ($testMode -eq "Yes") {
+            Write-Host "TEST MODE: No pool or volume updates were made" -ForegroundColor Green
+        } else {
             #Set volume throughput allocation
             foreach ($volume in $volumeList) {
             Update-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -Location $volume.Location -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.CreationToken -ServiceLevel $volume.ServiceLevel -ThroughputMibps $offHoursMiBsperVolume > $null
         }
         # Set Pool Size
         Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -PoolSize $offHoursKiBs > $null
+        }
 
     } else {
         Write-Host "During business hours"
+        Write-Host "Target pool size: $onHoursTiBs TiB; target throughput per volume: $onHoursMiBsperVolume MiB/s"
+        if ($testMode -eq "Yes") {
+            Write-Host "TEST MODE: No pool or volume updates were made" -ForegroundColor Green
+        } else {
             #Set Pool Size
             Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -Location $anfPool.Location -AccountName $anfAccountName -Name $anfPoolName -PoolSize $onHoursKiBs > $null
             #Set volume throughput allocation
             foreach ($volume in $volumeList) {
                 Update-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -Location $volume.Location -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.CreationToken -ServiceLevel $volume.ServiceLevel -ThroughputMibps $onHoursMiBsperVolume > $null
             }
+        }
     }

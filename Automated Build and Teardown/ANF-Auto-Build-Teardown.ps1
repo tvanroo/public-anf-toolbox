@@ -34,6 +34,7 @@ $vol_qty =              3                                       # Total number o
 $volSizeInGiB =         60                                      # Size in GiB for each Volume. Volumes with Variable sizes are not currently supported. (minimum 50)
 $serviceLevel =         "Standard"                              # "Standard" or "Premium" or "Ultra"
 $delegatedSubnetId =    "/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/example-rg/providers/Microsoft.Network/virtualNetworks/example-vnet/subnets/example-sub" # Set delegated subnet id (must exist)
+$previewOnly =          "Yes"                                   # Preview Selector: "Yes", "No"  Yes lists actions, No creates or deletes resources
 
 # Calculations based on User Editable Variables:
     $volSize = $volSizeInGiB * 1073741824                   # in bytes, 1 GiB = 1073741824 bytes
@@ -45,6 +46,15 @@ $delegatedSubnetId =    "/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/res
 if (-not (Get-AzContext)) {
     Connect-AzAccount -TenantId $tenantId
     Get-AzContext
+}
+
+if ($previewOnly -eq "Yes") {
+    Write-Host "Script is running in preview mode. Resource create/delete actions will not be performed." -ForegroundColor Green
+} elseif ($previewOnly -eq "No") {
+    Write-Host "Script is running in ***live*** mode. Resource create/delete actions ***will*** be performed." -ForegroundColor Yellow
+} else {
+    Write-Host "Preview Selector is not set to Yes or No. Exiting Script." -ForegroundColor Red
+    exit
 }
 
 # Ask user to choose the "Create ANF Resources" or "Delete ANF Resources" option.
@@ -63,6 +73,9 @@ if ($option -eq 1) {
     Write-Host "You have selected to create ANF Resources"
     $expectedTime = [math]::Round(($vol_qty * 0.5) + 6.5)
     Write-Host "This creation process should take approximately $expectedTime minutes to complete" -ForegroundColor Yellow
+    if ($previewOnly -eq "Yes") {
+        Write-Host "PREVIEW ONLY: Create operations will be listed but not performed." -ForegroundColor Green
+    }
 
     # Identify total size of any existing volumes within the pool
     $existingVolSize = 0
@@ -97,18 +110,26 @@ if ($option -eq 1) {
 
     # Check for ANF account and create if not present, with output for debugging
     if (-not (Get-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -ErrorAction SilentlyContinue)) {
-        Write-Host "Creating ANF Account $anfAccountName in $resourceGroupName" -ForegroundColor Yellow
-        New-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -Location $location > $null
-        Write-Host "Account $anfAccountName created" -ForegroundColor Green
+        if ($previewOnly -eq "Yes") {
+            Write-Host "PREVIEW ONLY: Would create ANF Account $anfAccountName in $resourceGroupName" -ForegroundColor Yellow
+        } else {
+            Write-Host "Creating ANF Account $anfAccountName in $resourceGroupName" -ForegroundColor Yellow
+            New-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -Location $location > $null
+            Write-Host "Account $anfAccountName created" -ForegroundColor Green
+        }
     } else {
         Write-Host "ANF Account $anfAccountName already exists in $resourceGroupName" -ForegroundColor Green
     }
 
     # Check for ANF Capacity Pool and create if not present, with output for debugging
     if (-not (Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction SilentlyContinue)) {
-        Write-Host "Creating ANF Capacity Pool $anfPoolName in $anfAccountName" -ForegroundColor Yellow
-        New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -Location $location -ServiceLevel "Standard" -PoolSize $anfPoolSize > $null
-        Write-Host "Capacity Pool $anfPoolName created" -ForegroundColor Green
+        if ($previewOnly -eq "Yes") {
+            Write-Host "PREVIEW ONLY: Would create ANF Capacity Pool $anfPoolName in $anfAccountName" -ForegroundColor Yellow
+        } else {
+            Write-Host "Creating ANF Capacity Pool $anfPoolName in $anfAccountName" -ForegroundColor Yellow
+            New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -Location $location -ServiceLevel "Standard" -PoolSize $anfPoolSize > $null
+            Write-Host "Capacity Pool $anfPoolName created" -ForegroundColor Green
+        }
     } else {
         Write-Host "ANF Capacity Pool $anfPoolName already exists in $anfAccountName" -ForegroundColor Green
     }
@@ -117,9 +138,13 @@ if ($option -eq 1) {
     for ($i = 1; $i -le $vol_qty; $i++) {
         $volName = $vol_prefix + $i
         if (-not (Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -ErrorAction SilentlyContinue)) {
-            Write-Host "Creating ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
-            New-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -Location $location -ServiceLevel $serviceLevel -UsageThreshold $volSize -SubnetId $delegatedSubnetId -CreationToken $volName -NetworkFeature Standard > $null
-            Write-Host "Volume $volName created" -ForegroundColor Green
+            if ($previewOnly -eq "Yes") {
+                Write-Host "PREVIEW ONLY: Would create ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
+            } else {
+                Write-Host "Creating ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
+                New-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -Location $location -ServiceLevel $serviceLevel -UsageThreshold $volSize -SubnetId $delegatedSubnetId -CreationToken $volName -NetworkFeature Standard > $null
+                Write-Host "Volume $volName created" -ForegroundColor Green
+            }
         } else {
             Write-Host "ANF Volume $volName already exists in $anfPoolName" -ForegroundColor Green
         }
@@ -129,13 +154,26 @@ if ($option -eq 1) {
     Write-Host "You have selected to delete ANF Resources"
     
     # List all volumes within the capacity pool
-    $volumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+    $volumes = @(Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction SilentlyContinue)
     $expectedTime = [math]::Round(($volumes.count * 0.5) + 2.5)
     Write-Host "This delete process should take approximately $expectedTime minutes to complete" -ForegroundColor Yellow
     
     # For each volume in volumes, write volume name to Write-Host
     foreach ($vol in $volumes) {
         Write-Host $vol.CreationToken "to be deleted" -ForegroundColor Red
+    }
+
+    if ($previewOnly -eq "Yes") {
+        Write-Host "PREVIEW ONLY: Would delete all listed volumes, then capacity pool $anfPoolName, then ANF account $anfAccountName." -ForegroundColor Yellow
+        Write-Host "Set previewOnly to No and re-run to perform deletion." -ForegroundColor Yellow
+        exit
+    }
+
+    $expectedConfirmation = "DELETE $anfAccountName/$anfPoolName"
+    $confirmation = Read-Host "Type '$expectedConfirmation' to continue"
+    if ($confirmation -ne $expectedConfirmation) {
+        Write-Host "Confirmation did not match. No resources were deleted." -ForegroundColor Red
+        exit
     }
 
     # Delete all volumes in the capacity pool

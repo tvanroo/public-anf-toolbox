@@ -13,3 +13,10 @@ By using any content from this repository, you acknowledge that you do so at you
 # Download Script:
 [ANF Daily Pool Size Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Daily%20Pool%20Size%20Scaling%20Plan/ANF-daily-pool-size-scaling-plan.ps1)
     - Resizes the Capacity Pool and allocates throughput to volumes equally to scale up/down performance for on/off hours.
+
+## GA Safety Notes
+
+- The script defaults to `$testMode = "Yes"`, which prints the target pool size and per-volume throughput without changing Azure resources.
+- Live changes require setting `$testMode = "No"`.
+- Auto QoS conversion to Manual is also gated by live mode.
+- The script exits without changes when no volumes are found, avoiding divide-by-zero or empty-pool update behavior.

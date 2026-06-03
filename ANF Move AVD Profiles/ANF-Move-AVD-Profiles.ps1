@@ -8,204 +8,356 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
-Last Edit Date: 08/15/2025
+Last Edit Date: 06/03/2026
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-1. This script safely copies and then deletes the contents of a source directory to a destination directory using BITS and is tuned for FSLogix Profile data and moving from an old SMB path to an Azure NetApp Files (ANF) SMB share. 
-2. The script compares the creation and modified dates of files in the source and destination. 
-    - If the source file is more recently modified, it will overwrite the destination file. (don't overwrite a real profile with a recently created empty profile file)
-    - If the source file is more recently created, it will not overwrite the destination file. (Don't overwrite a real profile with an older version of the same profile)
-3. To skip syncing profiles that are in use, the script will check for a .metadata file in the source directory or any subdirectory.
-4. SAFETY FEATURES:
-    - Automatically creates destination directories if they don't exist
-    - Validates file integrity using SHA256 hash comparison and file size verification
-    - Only deletes source files after successful copy and validation
-    - Comprehensive error handling with detailed logging
-    - Removes failed/partial destination files on copy errors
-    - Safe directory cleanup that only removes truly empty directories
+This script copies FSLogix profile data from an old SMB path to a new SMB path, using BITS and post-copy validation.
+By default it is a non-destructive copy/update tool: source files and source directories are preserved.
 
-This is the final Cutover script for an FSLogix SMB path move. 
-It should be used when both the old and new paths are in the FSLogix Profile container setting. (usually with the old Path in the primary position)
-Then for profile(s) that are not in use to be copied from the old SMB to the new SMB and the source data removed. 
-This will cause any moved profiles to start being used from the new SMB path.
-Profiles that are currently in use and profiles with conflicting metadata are skipped. 
+To use it as a final cutover move tool, pass -DeleteSourceAfterVerifiedCopy. Source files are deleted only after
+the matching destination file validates by SHA256 hash and file size. Source directories are removed only when
+that cutover mode is enabled and the directory is truly empty.
 
-IMPORTANT: Source files are only deleted after successful copy validation. If validation fails, source files are preserved and detailed error information is provided. 
-
+Reruns:
+- Profiles containing .metadata files are skipped.
+- New files are copied and validated.
+- Source files newer than matching destination files are copied and validated.
+- Identical already-copied source files are left in place unless -DeleteSourceAfterVerifiedCopy is used.
+- Destination files with conflicting creation times are skipped for manual review.
 #>
 
-# Define source and destination paths
-$SourcePath = "\\xyz.file.core.windows.net\xyz"
-$DestinationPath = "\\ANF-xyz.abc.gov\xyz-prod-001-anf-vol1-profiles"
-$FilterString = "Ssdfgsdfhsdfh"  # Replace with your filter string
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [string]$SourcePath = "\\xyz.file.core.windows.net\xyz",
 
-# Get all top-level directories in the source path
-$Directories = Get-ChildItem -Path $SourcePath -Directory
+    [Parameter()]
+    [string]$DestinationPath = "\\ANF-xyz.abc.gov\xyz-prod-001-anf-vol1-profiles",
 
+    [Parameter()]
+    [AllowNull()]
+    [string]$FilterString = "Ssdfgsdfhsdfh",
 
+    [Parameter()]
+    [switch]$DeleteSourceAfterVerifiedCopy,
 
-# Loop through each directory in the source path
-foreach ($Directory in $Directories) {
-    # Debugging: Output the directory name and filter string
-    #Write-Host "Checking Directory: $($Directory.Name)" -ForegroundColor Gray
+    [Parameter()]
+    [switch]$DryRun,
 
-    # Check if the directory name matches the filter string
-    if ($null -eq $FilterString -or $Directory.Name -like "*$FilterString*") {
-        # Check if the directory or any subdirectory contains a .metadata file
-        $MetadataFile = Get-ChildItem -Path $Directory.FullName -Recurse -File | Where-Object { $_.Extension -eq ".metadata" }
-        if ($MetadataFile) {
-            Write-Host "Skipped directory (Profile in use and contains .metadata file): $($Directory.FullName)" -ForegroundColor DarkGray
-            continue
+    [Parameter()]
+    [switch]$KeepFailedDestinationFiles
+)
+
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
+
+function Resolve-DirectoryPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter()]
+        [switch]$MustExist
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'Directory path cannot be empty.'
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            throw "Path is not a directory: $Path"
         }
 
-        # Get all files in the current directory recursively, excluding .metadata files
-        $SourceFiles = Get-ChildItem -Path $Directory.FullName -File -Recurse | Where-Object { $_.Extension -ne ".metadata" }
+        return (Resolve-Path -LiteralPath $Path).Path
+    }
 
-        # Loop through each file in the source directory
-        foreach ($SourceFile in $SourceFiles) {
-            # Define the corresponding destination file path
-            $DestinationFilePath = $SourceFile.FullName -replace [regex]::Escape($SourcePath), $DestinationPath
+    if ($MustExist) {
+        throw "Directory does not exist: $Path"
+    }
 
-            # Ensure destination directory exists BEFORE any file operations
-            $DestinationDirectory = Split-Path -Path $DestinationFilePath -Parent
-            if (-not (Test-Path $DestinationDirectory)) {
-                New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
-                Write-Host "Created destination directory: $DestinationDirectory" -ForegroundColor Cyan
-            }
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
 
-            # Check if the destination file exists
-            if (Test-Path $DestinationFilePath) {
-                # Get the destination file object
-                $DestinationFile = Get-Item -Path $DestinationFilePath
+function ConvertTo-ComparablePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
 
-                # Compare creation and modified dates
-                if ($SourceFile.CreationTime -eq $DestinationFile.CreationTime) {
-                    if ($SourceFile.LastWriteTime -gt $DestinationFile.LastWriteTime) {
-                        # Measure the time taken for the transfer
-                        $startTime = Get-Date
-                        try {
-                            Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
-                            $endTime = Get-Date
+    $trimmed = $Path.TrimEnd([char[]]@('\', '/'))
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return $Path
+    }
 
-                            # Validate the copy was successful
-                            $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
-                            $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
-                            $SourceSize = (Get-Item $SourceFile.FullName).Length
-                            $DestinationSize = (Get-Item $DestinationFilePath).Length
+    return $trimmed
+}
 
-                            if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
-                                # Calculate the transfer speed
-                                $duration = ($endTime - $startTime).TotalSeconds
-                                $fileSize = $SourceSize / 1MB
-                                $speed = if ($duration -gt 0) { $fileSize / $duration } else { 0 }
+function Test-IsChildPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
 
-                                Write-Host ("Updated: $DestinationFilePath at {0:N2} MiB/s - VALIDATED" -f $speed) -ForegroundColor Green
+        [Parameter(Mandatory = $true)]
+        [string]$ParentPath
+    )
 
-                                # Remove the source file after successful transfer and validation
-                                Remove-Item -Path $SourceFile.FullName -Force
-                                Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
-                            } else {
-                                Write-Host "ERROR: Copy validation failed for $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
-                                Write-Host "  Source Hash: $($SourceHash.Hash)" -ForegroundColor Red
-                                Write-Host "  Dest Hash: $($DestinationHash.Hash)" -ForegroundColor Red
-                                Write-Host "  Source Size: $SourceSize bytes" -ForegroundColor Red
-                                Write-Host "  Dest Size: $DestinationSize bytes" -ForegroundColor Red
-                            }
-                        } catch {
-                            Write-Host "ERROR: Failed to copy $($SourceFile.FullName) to $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
-                            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-                        }
-                    } else {
-                        Write-Host "Skipped (destination file modified date is -ge the source.): $DestinationFilePath" -ForegroundColor White
+    $child = ConvertTo-ComparablePath -Path $Path
+    $parent = ConvertTo-ComparablePath -Path $ParentPath
 
-                        # Validate files are identical before removing source
-                        try {
-                            $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
-                            $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
-                            $SourceSize = (Get-Item $SourceFile.FullName).Length
-                            $DestinationSize = (Get-Item $DestinationFilePath).Length
+    return (
+        $child.StartsWith("$parent\", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $child.StartsWith("$parent/", [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
 
-                            if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
-                                # Remove the source file only if it matches the destination
-                                Remove-Item -Path $SourceFile.FullName -Force
-                                Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
-                            } else {
-                                Write-Host "WARNING: Files differ - SOURCE NOT DELETED: $($SourceFile.FullName)" -ForegroundColor Red
-                            }
-                        } catch {
-                            Write-Host "ERROR: Could not validate files - SOURCE NOT DELETED: $($SourceFile.FullName)" -ForegroundColor Red
-                            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-                        }
-                    }
-                } else {
-                    Write-Host "Skipped (creation dates differ, new empty profile likely created, resolve manually.): $DestinationFilePath" -ForegroundColor Yellow
-                }
-            } else {
-                # Measure the time taken for the transfer
-                $startTime = Get-Date
-                try {
-                    Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "File Transfer"
-                    $endTime = Get-Date
+function Test-VerifiedCopy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceFilePath,
 
-                    # Validate the copy was successful
-                    $SourceHash = Get-FileHash -Path $SourceFile.FullName -Algorithm SHA256
-                    $DestinationHash = Get-FileHash -Path $DestinationFilePath -Algorithm SHA256
-                    $SourceSize = (Get-Item $SourceFile.FullName).Length
-                    $DestinationSize = (Get-Item $DestinationFilePath).Length
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath
+    )
 
-                    if ($SourceHash.Hash -eq $DestinationHash.Hash -and $SourceSize -eq $DestinationSize) {
-                        # Calculate the transfer speed
-                        $duration = ($endTime - $startTime).TotalSeconds
-                        $fileSize = $SourceSize / 1MB
-                        $speed = if ($duration -gt 0) { $fileSize / $duration } else { 0 }
+    if (-not (Test-Path -LiteralPath $SourceFilePath -PathType Leaf) -or -not (Test-Path -LiteralPath $DestinationFilePath -PathType Leaf)) {
+        return $false
+    }
 
-                        Write-Host ("Copied new file: $DestinationFilePath at {0:N2} MiB/s - VALIDATED" -f $speed) -ForegroundColor Green
+    $sourceHash = Get-FileHash -LiteralPath $SourceFilePath -Algorithm SHA256
+    $destinationHash = Get-FileHash -LiteralPath $DestinationFilePath -Algorithm SHA256
+    $sourceSize = (Get-Item -LiteralPath $SourceFilePath).Length
+    $destinationSize = (Get-Item -LiteralPath $DestinationFilePath).Length
 
-                        # Remove the source file after successful transfer and validation
-                        Remove-Item -Path $SourceFile.FullName -Force
-                        Write-Host "Deleted: $(Join-Path -Path $SourceFile.Directory.FullName -ChildPath $SourceFile.Name)" -ForegroundColor Yellow
-                    } else {
-                        Write-Host "ERROR: Copy validation failed for new file $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
-                        Write-Host "  Source Hash: $($SourceHash.Hash)" -ForegroundColor Red
-                        Write-Host "  Dest Hash: $($DestinationHash.Hash)" -ForegroundColor Red
-                        Write-Host "  Source Size: $SourceSize bytes" -ForegroundColor Red
-                        Write-Host "  Dest Size: $DestinationSize bytes" -ForegroundColor Red
-                        
-                        # Remove the failed destination file
-                        if (Test-Path $DestinationFilePath) {
-                            Remove-Item -Path $DestinationFilePath -Force
-                            Write-Host "Removed failed destination file: $DestinationFilePath" -ForegroundColor Red
-                        }
-                    }
-                } catch {
-                    Write-Host "ERROR: Failed to copy new file $($SourceFile.FullName) to $DestinationFilePath - SOURCE NOT DELETED" -ForegroundColor Red
-                    Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
-                    
-                    # Remove any partially created destination file
-                    if (Test-Path $DestinationFilePath) {
-                        Remove-Item -Path $DestinationFilePath -Force
-                        Write-Host "Removed partial destination file: $DestinationFilePath" -ForegroundColor Red
-                    }
-                }
-            }
+    return ($sourceHash.Hash -eq $destinationHash.Hash -and $sourceSize -eq $destinationSize)
+}
+
+function Remove-SourceFileIfRequested {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceFilePath
+    )
+
+    if (-not $DeleteSourceAfterVerifiedCopy) {
+        Write-Host "Source retained: $SourceFilePath" -ForegroundColor Gray
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: Would delete verified source file: $SourceFilePath" -ForegroundColor Yellow
+        return
+    }
+
+    Remove-Item -LiteralPath $SourceFilePath -Force
+    Write-Host "Deleted verified source file: $SourceFilePath" -ForegroundColor Yellow
+}
+
+function Remove-DestinationFileIfFailed {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath
+    )
+
+    if ($KeepFailedDestinationFiles -or -not (Test-Path -LiteralPath $DestinationFilePath -PathType Leaf)) {
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: Would remove failed destination file: $DestinationFilePath" -ForegroundColor Red
+        return
+    }
+
+    Remove-Item -LiteralPath $DestinationFilePath -Force
+    Write-Host "Removed failed destination file: $DestinationFilePath" -ForegroundColor Red
+}
+
+function Copy-ProfileFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.FileInfo]$SourceFile,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ActionLabel
+    )
+
+    $destinationDirectory = Split-Path -Path $DestinationFilePath -Parent
+    if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+        if ($DryRun) {
+            Write-Host "DRY RUN: Would create destination directory: $destinationDirectory" -ForegroundColor Cyan
         }
-
-        # Remove the source directory if it is empty (but only after all files are successfully processed)
-        try {
-            $RemainingItems = Get-ChildItem -Path $Directory.FullName -Recurse -Force
-            if (-not $RemainingItems) {
-                Remove-Item -Path $Directory.FullName -Force
-                Write-Host "Deleted empty directory: $($Directory.FullName)" -ForegroundColor Yellow
-            } else {
-                Write-Host "Directory not empty, keeping: $($Directory.FullName)" -ForegroundColor Gray
-                Write-Host "  Remaining items: $($RemainingItems.Count)" -ForegroundColor Gray
-            }
-        } catch {
-            Write-Host "WARNING: Could not remove directory $($Directory.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+        else {
+            New-Item -Path $destinationDirectory -ItemType Directory -Force | Out-Null
+            Write-Host "Created destination directory: $destinationDirectory" -ForegroundColor Cyan
         }
-    } else {
-        Write-Host "Skipped directory (does not match filter): $($Directory.FullName)" -ForegroundColor Gray
+    }
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: Would $ActionLabel '$($SourceFile.FullName)' to '$DestinationFilePath'" -ForegroundColor Yellow
+        $script:Summary.PlannedCopies++
+        return
+    }
+
+    $startTime = Get-Date
+    try {
+        Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "FSLogix Profile File Transfer" -ErrorAction Stop
+        $endTime = Get-Date
+
+        if (Test-VerifiedCopy -SourceFilePath $SourceFile.FullName -DestinationFilePath $DestinationFilePath) {
+            $duration = ($endTime - $startTime).TotalSeconds
+            $fileSizeMiB = $SourceFile.Length / 1MB
+            $speed = if ($duration -gt 0) { $fileSizeMiB / $duration } else { 0 }
+
+            Write-Host ("$ActionLabel validated: $DestinationFilePath at {0:N2} MiB/s" -f $speed) -ForegroundColor Green
+            $script:Summary.CopiedFiles++
+            Remove-SourceFileIfRequested -SourceFilePath $SourceFile.FullName
+        }
+        else {
+            Write-Host "ERROR: Copy validation failed for $DestinationFilePath - source retained" -ForegroundColor Red
+            $script:Summary.ValidationFailures++
+            Remove-DestinationFileIfFailed -DestinationFilePath $DestinationFilePath
+        }
+    }
+    catch {
+        Write-Host "ERROR: Failed to copy $($SourceFile.FullName) to $DestinationFilePath - source retained" -ForegroundColor Red
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+        $script:Summary.CopyFailures++
+        Remove-DestinationFileIfFailed -DestinationFilePath $DestinationFilePath
     }
 }
+
+$resolvedSource = Resolve-DirectoryPath -Path $SourcePath -MustExist
+$resolvedDestination = Resolve-DirectoryPath -Path $DestinationPath
+$sourceCompare = ConvertTo-ComparablePath -Path $resolvedSource
+$destinationCompare = ConvertTo-ComparablePath -Path $resolvedDestination
+
+if ($sourceCompare.Equals($destinationCompare, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error 'SourcePath and DestinationPath resolve to the same directory. Choose a separate destination.'
+    exit 1
+}
+
+if (Test-IsChildPath -Path $resolvedDestination -ParentPath $resolvedSource) {
+    Write-Error 'DestinationPath must not be inside SourcePath because that would create or update files under the source tree.'
+    exit 1
+}
+
+$destinationItem = Get-Item -LiteralPath $resolvedDestination -Force -ErrorAction SilentlyContinue
+if ($null -ne $destinationItem -and (($destinationItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    Write-Error 'DestinationPath must not be a reparse point, junction, or symlink. Use the real destination path to avoid writing through a link.'
+    exit 1
+}
+
+if (-not $DryRun -and -not (Test-Path -LiteralPath $resolvedDestination)) {
+    New-Item -Path $resolvedDestination -ItemType Directory -Force | Out-Null
+}
+
+Write-Host '=== ANF Move AVD Profiles - Configuration ===' -ForegroundColor Cyan
+Write-Host "Source Path: $resolvedSource" -ForegroundColor White
+Write-Host "Destination Path: $resolvedDestination" -ForegroundColor White
+Write-Host "Filter String: $(if ([string]::IsNullOrWhiteSpace($FilterString)) { '<none>' } else { $FilterString })" -ForegroundColor White
+Write-Host "Delete Source After Verified Copy: $($DeleteSourceAfterVerifiedCopy.IsPresent)" -ForegroundColor White
+Write-Host "Dry Run: $($DryRun.IsPresent)" -ForegroundColor White
+Write-Host 'Default mode is copy/update only; source files are preserved.' -ForegroundColor Green
+Write-Host '=============================================' -ForegroundColor Cyan
+
+$script:Summary = [ordered]@{
+    DirectoriesProcessed = 0
+    DirectoriesSkippedByFilter = 0
+    DirectoriesSkippedInUse = 0
+    PlannedCopies = 0
+    CopiedFiles = 0
+    IdenticalFiles = 0
+    ConflictFiles = 0
+    CopyFailures = 0
+    ValidationFailures = 0
+}
+
+$directories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory)
+
+foreach ($directory in $directories) {
+    if (-not [string]::IsNullOrWhiteSpace($FilterString) -and $directory.Name -notlike "*$FilterString*") {
+        Write-Host "Skipped directory (does not match filter): $($directory.FullName)" -ForegroundColor Gray
+        $script:Summary.DirectoriesSkippedByFilter++
+        continue
+    }
+
+    $metadataFiles = @(Get-ChildItem -LiteralPath $directory.FullName -Recurse -File | Where-Object { $_.Extension -eq '.metadata' })
+    if ($metadataFiles.Count -gt 0) {
+        Write-Host "Skipped directory (profile in use or metadata present): $($directory.FullName)" -ForegroundColor DarkGray
+        $script:Summary.DirectoriesSkippedInUse++
+        continue
+    }
+
+    $script:Summary.DirectoriesProcessed++
+    $sourceFiles = @(Get-ChildItem -LiteralPath $directory.FullName -File -Recurse | Where-Object { $_.Extension -ne '.metadata' })
+
+    foreach ($sourceFile in $sourceFiles) {
+        $relativePath = $sourceFile.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+        $destinationFilePath = Join-Path -Path $resolvedDestination -ChildPath $relativePath
+
+        if (Test-Path -LiteralPath $destinationFilePath -PathType Leaf) {
+            $destinationFile = Get-Item -LiteralPath $destinationFilePath
+
+            if ($sourceFile.CreationTime -eq $destinationFile.CreationTime) {
+                if ($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime) {
+                    Copy-ProfileFile -SourceFile $sourceFile -DestinationFilePath $destinationFilePath -ActionLabel 'Updated'
+                }
+                elseif (Test-VerifiedCopy -SourceFilePath $sourceFile.FullName -DestinationFilePath $destinationFilePath) {
+                    Write-Host "Identical already copied file: $destinationFilePath" -ForegroundColor White
+                    $script:Summary.IdenticalFiles++
+                    Remove-SourceFileIfRequested -SourceFilePath $sourceFile.FullName
+                }
+                else {
+                    Write-Host "WARNING: Destination is not older, but files differ - source retained: $($sourceFile.FullName)" -ForegroundColor Red
+                    $script:Summary.ConflictFiles++
+                }
+            }
+            else {
+                Write-Host "Skipped conflict (creation dates differ, resolve manually): $destinationFilePath" -ForegroundColor Yellow
+                $script:Summary.ConflictFiles++
+            }
+        }
+        else {
+            Copy-ProfileFile -SourceFile $sourceFile -DestinationFilePath $destinationFilePath -ActionLabel 'Copied new file'
+        }
+    }
+
+    if ($DeleteSourceAfterVerifiedCopy) {
+        try {
+            $remainingItems = @(Get-ChildItem -LiteralPath $directory.FullName -Recurse -Force)
+            if ($remainingItems.Count -eq 0) {
+                if ($DryRun) {
+                    Write-Host "DRY RUN: Would delete empty source directory: $($directory.FullName)" -ForegroundColor Yellow
+                }
+                else {
+                    Remove-Item -LiteralPath $directory.FullName -Force
+                    Write-Host "Deleted empty source directory: $($directory.FullName)" -ForegroundColor Yellow
+                }
+            }
+            else {
+                Write-Host "Directory not empty, keeping: $($directory.FullName)" -ForegroundColor Gray
+                Write-Host "  Remaining items: $($remainingItems.Count)" -ForegroundColor Gray
+            }
+        }
+        catch {
+            Write-Host "WARNING: Could not inspect or remove directory $($directory.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+
+Write-Host ''
+Write-Host '=== ANF Move AVD Profiles - Summary ===' -ForegroundColor Cyan
+foreach ($key in $script:Summary.Keys) {
+    Write-Host "$key`: $($script:Summary[$key])" -ForegroundColor White
+}
+Write-Host '=======================================' -ForegroundColor Cyan
+
+if ($script:Summary.CopyFailures -gt 0 -or $script:Summary.ValidationFailures -gt 0 -or $script:Summary.ConflictFiles -gt 0) {
+    exit 1
+}
+
+exit 0

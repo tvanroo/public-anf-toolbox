@@ -14,3 +14,10 @@ By using any content from this repository, you acknowledge that you do so at you
 # Download Script:
 [Mimic Auto](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1)
     - Allocates _all_ pool throughput to volumes based on relative volume size. Result: Volume performance is governed by volume size.
+
+## GA Safety Notes
+
+- The script defaults to `$testMode = "Yes"`, so it reports planned throughput allocation without updating volumes.
+- Live updates require `$testMode = "No"`.
+- Auto QoS to Manual conversion is previewed in test mode and only executed when both `$ConvertToManualMode = "Yes"` and `$testMode = "No"`.
+- Re-runs compare the current volume throughput values and only apply changes when the calculated target differs.

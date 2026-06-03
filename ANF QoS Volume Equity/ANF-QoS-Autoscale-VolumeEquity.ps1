@@ -30,8 +30,9 @@ Use "Connect-AzAccount -Identity" instead of "Connect-AzAccount".
     $resourceGroupName = "example-rg"                       # Resource group name where the Azure NetApp Files resources are located
     $anfAccountName = "example-anf-acct"                    # Azure NetApp Files account name
     $anfPoolName = "example-anf-pool"                       # Azure NetApp Files capacity pool name
-    $testMode = "No"                                        # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes and displays report
+    $testMode = "Yes"                                       # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes and displays report
     $ConvertToManualMode = "Yes"                            # Convert to manual mode: "Yes", "No" Yes converts to manual QoS, No does not convert to manual QoS and exist script if QoS is not manual
+    $throughputLookBackHours = 168                          # Look-back period in hours for throughput metrics
 
 
 # Connect to Azure
@@ -69,17 +70,17 @@ if ($cap_pool_qos_type -eq "Manual" -or $ConvertToManualMode -eq "Yes" -or $test
     } 
 
 # If QoS is Auto and ConvertToManualMode is set to "Yes", convert the Capacity Pool to Manual
-if ($capacityPoolQosType -eq "Auto" -and $ConvertToManualMode -eq "Yes") {
-    Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
-    $anfPool | Update-AzNetAppFilesPool -QosType Manual  > $null
-    $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-    $finalData | ForEach-Object {
-        if ($_.ShortName -ne "unallocated") {
-            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $_.ShortName
-            $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps 1 > $null
-        }
+if ($cap_pool_qos_type -eq "Auto" -and $ConvertToManualMode -eq "Yes") {
+    if ($testMode -eq "Yes") {
+        Write-Host "TEST MODE: Capacity Pool QoS would be converted to Manual" -ForegroundColor Yellow
+    } else {
+        Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
+        $anfPool | Update-AzNetAppFilesPool -QosType Manual  > $null
+        $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
+        $cap_pool_qos_type = $anfPool.QosType
+        $cap_pool_max_throughput = $anfPool.TotalThroughputMibps
+        Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
     }
-    Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
 }   
 
 

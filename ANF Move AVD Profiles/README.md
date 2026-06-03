@@ -27,7 +27,7 @@ This script is specifically designed as a **final cutover tool** for migrating F
   - Preserves newer profiles and prevents overwriting with older versions
   - Skips profiles with conflicting creation dates for manual resolution
 - **Transfer Speed Monitoring**: Displays transfer speeds in MiB/s for performance monitoring
-- **Cleanup Operations**: Automatically removes source files and empty directories after successful transfers
+- **Optional Cleanup Operations**: Source files and empty directories are only removed when `-DeleteSourceAfterVerifiedCopy` is used
 - **Selective Migration**: Supports filtering specific profiles using configurable filter strings
 
 ## Migration Logic
@@ -35,19 +35,26 @@ The script follows this intelligent decision tree for each file:
 
 1. **Check Profile Usage**: Skip entire profile if `.metadata` file exists (profile in use)
 2. **File Existence Check**: 
-   - If destination file doesn't exist → Copy and delete source
+   - If destination file doesn't exist → Copy source to destination
    - If destination file exists → Apply conflict resolution logic
 3. **Conflict Resolution** (when destination exists):
    - If creation times match AND source is newer → Overwrite destination
-   - If creation times match AND destination is newer/same → Skip overwrite, delete source
+   - If creation times match AND destination is newer/same → Skip overwrite
    - If creation times differ → Skip for manual resolution (prevents empty profile overwrites)
+4. **Source Cleanup**:
+   - Source files remain in place by default
+   - With `-DeleteSourceAfterVerifiedCopy`, source files are deleted only after destination size and SHA256 hash validation
 
 ## Configuration Variables
 ```powershell
-$SourcePath = "\\old-fileserver.domain.com\profiles"        # Source SMB share path
-$DestinationPath = "\\ANF-server.domain.com\anf-profiles"   # ANF SMB share path  
-$FilterString = "username-filter"                           # Optional filter for specific users
+.\ANF-Move-AVD-Profiles.ps1 `
+    -SourcePath "\\old-fileserver.domain.com\profiles" `
+    -DestinationPath "\\ANF-server.domain.com\anf-profiles" `
+    -FilterString "username-filter" `
+    -DryRun
 ```
+
+Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerifiedCopy` only for a final cutover cleanup after reviewing the copy results.
 
 ## Prerequisites
 - **Dual Path Configuration**: Both old and new SMB paths should be configured in FSLogix settings
@@ -68,11 +75,13 @@ $FilterString = "username-filter"                           # Optional filter fo
 - Useful for phased migrations or troubleshooting specific profiles
 
 ### **Cleanup Operations**  
-- Remove migrated data from legacy storage
+- Optionally remove migrated data from legacy storage after verified copies
 - Consolidate profiles from multiple legacy shares
 
 ## Safety Features
-- **Read-Only Mode**: Commented transfer and deletion commands for testing
+- **Dry Run Mode**: `-DryRun` lists copy, overwrite, and optional cleanup actions without changing files
+- **Non-Destructive Default**: Source files are preserved unless `-DeleteSourceAfterVerifiedCopy` is provided
+- **Verified Source Cleanup**: Optional source deletion requires matching destination size and SHA256 hash
 - **Profile Lock Detection**: Automatically skips profiles with active `.metadata` files
 - **Conflict Logging**: Clear console output showing all actions taken
 - **Preservation Logic**: Prevents overwriting newer profiles with older versions
@@ -80,7 +89,7 @@ $FilterString = "username-filter"                           # Optional filter fo
 
 ## Output Messages
 - **🟢 Green**: Successful file copies and updates with transfer speeds
-- **🟡 Yellow**: File deletions and conflicts requiring manual resolution  
+- **🟡 Yellow**: Optional cleanup actions and conflicts requiring manual resolution
 - **⚪ White**: Skipped files with reasoning
 - **🔘 Gray**: Filtered or in-use profiles that were skipped
 
@@ -106,8 +115,8 @@ $FilterString = "username-filter"                           # Optional filter fo
 - **BITS Errors**: Ensure BITS service is running and properly configured
 
 ## Important Notes
-- This is a **destructive operation** - source files are deleted after successful transfer
-- Always uncomment the actual transfer and deletion commands only after thorough testing
-- The script includes safety comments (`############################`) around critical operations
+- By default, this is a one-way sync to the destination and does not delete source files
+- `-DeleteSourceAfterVerifiedCopy` turns it into a final cutover cleanup tool
+- Failed destination copies are removed by default so reruns can copy them cleanly; use `-KeepFailedDestinationFiles` only when you need to inspect failed output
 - Manual resolution is required for profiles with conflicting creation dates
 - Profiles currently in use (with `.metadata` files) are automatically protected

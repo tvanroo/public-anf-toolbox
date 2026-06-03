@@ -12,4 +12,11 @@ By using any content from this repository, you acknowledge that you do so at you
 
 # Download Script:
 [ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Weekend%20Scaling%20Plan/anf-weekend-scaling-plan.ps1)
-    - Allocates _all_ pool throughput to volumes equally, regardless of volume size. Result: Volume performance is governed by volume quantity.
+    - Moves volumes between weekday and weekend pools to shift service levels for scheduled cost savings.
+
+## GA Safety Notes
+
+- The script defaults to `$testMode = "Yes"`, which lists planned pool creation, volume moves, and old-pool deletion without changing Azure resources.
+- Live changes require setting `$testMode = "No"`.
+- Re-runs inspect the initial, weekend, and weekday pools first. If the volumes are already in the correct pool for the current schedule, no move or delete action is attempted.
+- Pool deletion is only reached after the replacement pool is created and volumes are moved in live mode.

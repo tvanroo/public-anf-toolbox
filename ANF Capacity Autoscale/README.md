@@ -14,3 +14,10 @@ By using any content from this repository, you acknowledge that you do so at you
 
 [ANF Capacity Autoscale](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1)
     - Monitors volume capacity utilization and automatically adjusts volume sizes to prevent running out of space while keeping the pool size optimized for cost efficiency. Analyzes consumption trends and proactively resizes volumes when utilization thresholds are reached.
+
+## GA Safety Notes
+
+- Both autoscale scripts default to test mode. `ANF_TestMode` must be set to `No` before pool, volume, or throughput changes are applied.
+- If `ANF_TestMode` is missing in Azure Automation, the scripts now fall back to `Yes` instead of live mode.
+- Local defaults are placeholders. Replace the resource group, account, pool, and volume values before running against real ANF resources.
+- Re-runs recalculate current capacity and throughput state before acting, so delta runs only apply changes that are still needed.
