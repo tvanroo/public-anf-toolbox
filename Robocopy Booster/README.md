@@ -1,4 +1,4 @@
-# ⚠️ Warning
+# Warning
 
 **Important Notice:**
 
@@ -10,113 +10,142 @@ This repository is published publicly as a resource for other Azure NetApp Files
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
+# Robocopy Booster
 
-# Download Scripts:
+Robocopy Booster accelerates large file-copy migrations that contain many small files by running multiple Robocopy jobs in parallel. Each top-level source directory becomes a separate Robocopy job, and root-level source files are copied as one additional job.
 
-## [Robocopy Booster (Original)](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster.ps1)
-- Runs multiple Robocopy commands in parallel, each with multiple threads to speed up the transfer of datasets containing numerous files where throughput limits are not being reached due to file count.
+## Download Scripts
 
-## [Robocopy Booster V2 (A/B Testing)](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster-v2.ps1)
-- Enhanced version with A/B testing capabilities for logging vs no-logging performance comparison. Includes silent mode with optimized switches for maximum throughput testing.
+### [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster.ps1)
 
-## Script Purpose
-These scripts are designed to accelerate file transfers in scenarios where you have many small files and standard single-threaded robocopy operations are not saturating available network bandwidth or storage throughput. The parallel approach distributes the workload across multiple robocopy processes running simultaneously.
+Baseline version with normal Robocopy output, parallel directory processing, dry-run support, source/destination path validation, and safe exit-code handling.
 
-## Key Features
+### [Robocopy Booster V2](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster-v2.ps1)
 
-### Original Script
-- **Parallel Processing**: Runs multiple robocopy jobs simultaneously
-- **Configurable Concurrency**: Control max parallel jobs and threads per job  
-- **Automatic Throttling**: Manages job queue to prevent system overload
-- **Progress Monitoring**: Real-time job status and completion tracking
+Enhanced version with the same copy behavior plus an `-EnableLogging` switch for A/B testing normal Robocopy output against silent/no-logging mode. When Robocopy reports a transfer speed in normal logging mode, V2 includes that per-job speed in the completion output.
 
-### V2 Enhanced Features
-- **A/B Testing Flag**: `$EnableLogging` parameter for performance comparison
-- **Silent Mode**: Uses `/NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL` switches
-- **Optimized Error Handling**: `/R:0 /W:0` for faster processing
-- **Detailed Results**: Comprehensive execution time and job status reporting
-- **Progress Indicators**: Real-time progress bar and completion percentages
+## Sync Contract
 
-## Performance Optimization
+These scripts are one-way source-to-destination copy/update tools.
 
-### Silent Mode Switches (V2)
-- `/NFL` - No File List (don't log individual files)
-- `/NDL` - No Directory List (don't log directories)
-- `/NJH` - No Job Header (suppress job header)
-- `/NJS` - No Job Summary (suppress job summary)
-- `/NP` - No Progress (don't show progress percentage)
-- `/NC` - No Class (don't log file classes)
-- `/NS` - No Size (don't log file sizes)
-- `/LOG:NUL` - Redirect log to null device
+- Source data is not deleted, moved, renamed, or purged.
+- The scripts do not use Robocopy `/MOV`, `/MOVE`, `/MIR`, or `/PURGE`.
+- The destination is created if it does not already exist, unless `-DryRun` is used.
+- The destination must not be inside the source path. The scripts block this because it would create or update files under the source tree.
+- Existing destination reparse points, junctions, and symlinks are blocked. Use the real destination path.
+- Top-level source reparse directories are skipped, and Robocopy runs with `/XJ` to avoid junction traversal.
+- Destination files may be created or overwritten when source files are new or changed.
+- Extra destination files are left in place. These scripts are not mirror/purge tools.
 
-### Expected Performance Gains
-- **Small Files**: 5-15% improvement in silent mode
-- **Network-Bound**: Minimal improvement for bandwidth-saturated transfers
-- **CPU-Bound**: More significant gains when processing overhead is the bottleneck
+## First Run Behavior
 
-## Configuration Variables
+On the first run, the scripts:
 
-### Common Settings (Both Versions)
+1. Validate that Robocopy is available.
+2. Validate that the source exists and is a directory.
+3. Resolve the destination path and create it if needed.
+4. Block unsafe destination paths, including destination paths inside the source tree or through reparse points.
+5. Copy source root files to the destination root.
+6. Copy each non-reparse top-level source directory to the matching destination directory in parallel.
+
+## Rerun / Delta Behavior
+
+On subsequent reruns, Robocopy handles delta behavior:
+
+- Matching files are skipped.
+- New source files are copied to the destination.
+- Changed source files are copied to the destination.
+- Deleted source files do not cause destination deletes.
+- Extra destination files are reported by Robocopy but left in place.
+
+This makes the scripts suitable for repeated catch-up passes before a final migration cutover where the source should remain untouched.
+
+## Example Usage
+
+Run a dry run first:
+
 ```powershell
-$max_jobs = 16          # Maximum parallel robocopy jobs
-$mtreads = 16           # Threads per robocopy job (/MT switch)
-$src = "Z:\source"      # Source directory path
-$dest = "C:\destination" # Destination directory path
+.\robocopy-booster-v2.ps1 `
+  -SourcePath "\\old-file-server\profiles" `
+  -DestinationPath "\\anf-smb-volume\profiles" `
+  -MaxJobs 8 `
+  -ThreadsPerJob 32 `
+  -DryRun
 ```
 
-### V2 Additional Settings
+Run the copy/update pass:
+
 ```powershell
-$EnableLogging = $false  # $true = normal logging, $false = silent mode
+.\robocopy-booster-v2.ps1 `
+  -SourcePath "\\old-file-server\profiles" `
+  -DestinationPath "\\anf-smb-volume\profiles" `
+  -MaxJobs 8 `
+  -ThreadsPerJob 32
 ```
 
-## Usage Scenarios
+Run V2 with normal Robocopy output for troubleshooting:
 
-### Standard File Migration
-- Use original script for general purpose file transfers
-- Good for testing and debugging with full logging
+```powershell
+.\robocopy-booster-v2.ps1 `
+  -SourcePath "\\old-file-server\profiles" `
+  -DestinationPath "\\anf-smb-volume\profiles" `
+  -MaxJobs 4 `
+  -ThreadsPerJob 16 `
+  -EnableLogging
+```
 
-### Performance Testing
-- Use V2 script with `$EnableLogging = $true` for baseline test
-- Use V2 script with `$EnableLogging = $false` for performance test
-- Compare execution times to measure logging overhead
+The original script supports the same core parameters, except it does not include `-EnableLogging` because it always uses normal Robocopy output.
 
-### Production Migrations
-- Use V2 script in silent mode for maximum throughput
-- Monitor results summary for success/failure counts
+## Parameters
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `-SourcePath` | `Z:\` | Source directory to copy from. Alias: `-src`. |
+| `-DestinationPath` | `C:\txtest` | Destination directory to copy to. Alias: `-dest`. |
+| `-MaxJobs` | `12` | Maximum parallel Robocopy jobs. Alias: `-max_jobs`. |
+| `-ThreadsPerJob` | `128` | Robocopy `/MT` threads per job. Alias: `-mtreads`. |
+| `-RetryCount` | `1` | Robocopy `/R` retry count. |
+| `-WaitSeconds` | `1` | Robocopy `/W` wait time between retries. |
+| `-DryRun` | Off | Adds Robocopy `/L` so actions are listed without writing to the destination. |
+| `-EnableLogging` | Off | V2 only. Shows normal Robocopy output. When omitted, V2 uses silent/no-logging switches. |
+
+## V2 Silent Mode Switches
+
+When `-EnableLogging` is omitted, V2 adds these switches:
+
+- `/NFL` - No file list.
+- `/NDL` - No directory list.
+- `/NJH` - No job header.
+- `/NJS` - No job summary.
+- `/NP` - No progress percentage.
+- `/NC` - No file classes.
+- `/NS` - No file sizes.
+- `/LOG:NUL` - Redirect Robocopy log output to the null device.
+
+## Exit Codes
+
+Each Robocopy job returns its Robocopy exit code. The scripts summarize all jobs and then return:
+
+- `0` when the highest Robocopy exit code is below `8`.
+- `1` when any job returns Robocopy exit code `8` or higher, or when script validation fails.
+
+Robocopy exit-code ranges:
+
+- `0-3`: Normal success states.
+- `4-7`: Warning states, often including extras or mismatches.
+- `8+`: Failure states.
 
 ## Best Practices
 
-### Directory Structure
-- Source should contain multiple subdirectories for parallel processing
-- Each subdirectory becomes a separate robocopy job
-- Works best with balanced directory sizes
+- Start with `-DryRun` against the real source and destination paths.
+- Use conservative values such as `-MaxJobs 4` and `-ThreadsPerJob 16`, then scale up while watching CPU, SMB sessions, network throughput, and storage latency.
+- Keep the destination outside the source tree.
+- Use V2 silent mode for throughput tests and `-EnableLogging` when troubleshooting.
+- For cutover planning, run multiple delta passes and review the final summary for warning/error jobs.
 
-### Resource Planning
-- Start with conservative job counts (4-8) and increase gradually
-- Monitor CPU and network utilization during transfers
-- Adjust threads per job based on storage capabilities
+## Important Limitations
 
-### Testing Approach
-1. **Small Test**: Run with 2-3 directories first
-2. **Baseline**: Test with logging enabled
-3. **Performance**: Test with logging disabled
-4. **Scale Up**: Increase job count based on system resources
-
-## Troubleshooting
-
-### Common Issues
-- **High CPU Usage**: Reduce `$max_jobs` or `$mtreads`
-- **Network Saturation**: Reduce total concurrent operations
-- **Slow Performance**: Check if source has enough directories for parallelization
-
-### Exit Codes
-- **0-3**: Success (normal completion)
-- **4-7**: Warnings (some files skipped)
-- **8+**: Errors (significant issues encountered)
-
-## Use Cases
-- **Azure NetApp Files**: Migrating to ANF volumes with high IOPS requirements
-- **File Server Migrations**: Moving from legacy storage to modern platforms
-- **Data Center Moves**: Bulk file transfers between locations
-- **Backup Operations**: Parallel backup of directory structures
-- **Performance Testing**: Measuring storage system capabilities
+- These scripts are designed for Windows environments where Robocopy is available.
+- They intentionally do not delete extra destination files. If you need mirror semantics, use a separate, carefully reviewed Robocopy command.
+- They intentionally skip top-level source reparse directories and exclude junction traversal. If reparse-point content must be copied, review and run a purpose-built Robocopy command for that specific path.
+- They parallelize by top-level source directory, so performance is best when source data is spread across multiple reasonably balanced directories.

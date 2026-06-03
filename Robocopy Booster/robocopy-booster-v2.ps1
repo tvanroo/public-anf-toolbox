@@ -9,265 +9,398 @@ By using any content from this repository, you acknowledge that you do so at you
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
 
-Last Edit Date: 07/24/2025
+Last Edit Date: 06/03/2026
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-Enhanced version of the Robocopy Booster with logging control and per-job speed reporting.
-This script runs parallel robocopy commands as PowerShell Jobs to speed up tiny file migrations. 
-The script includes a flag to switch between normal logging and silent/no-logging modes.
-The script handles both files in the root directory and subdirectories, processing them in parallel for optimal performance.
+Enhanced Robocopy Booster with logging/no-logging A/B testing, per-job speed reporting, and dry-run support.
+It performs a one-way source-to-destination copy/update operation. It does not use /MOV, /MOVE, /MIR, or /PURGE.
+It also avoids junction traversal with /XJ and skips top-level source reparse directories.
 
-Key Enhancements in V2:
-- Added $EnableLogging flag to toggle logging on or off
-- Silent mode uses switches: /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
-- Improved error handling and reduced retry/wait times (/R:0 /W:0)
-- Per-job transfer speed reporting (MB/s) when logging is enabled
-- Handles both root directory files and subdirectories in parallel
+First run:
+- Copies root files from the source to the destination.
+- Copies each top-level source directory to the matching destination directory in parallel.
 
-Parameters: 
-$max_jobs: The maximum number of parallel jobs to run.
-$mthreads: Change this to the number of threads to use for each robocopy job
-$src: Change this to a directory which contains files and/or subdirectories to be copied in parallel 
-$dest: Change this to where you want to backup your files to
-$EnableLogging: Set to $true for normal logging, $false for silent/no-logging mode
+Reruns:
+- Robocopy skips files that already match.
+- New and changed source files are copied to the destination.
+- Extra destination files are left in place.
 
-Processing Logic:
-- Root directory files are copied as a single job (if any exist)
-- Each subdirectory is processed as a separate parallel job
-- Both root files and subdirectories can be processed simultaneously
-
-Test results from sample size test. 100x 1k files, transferred over 1Gbps network:
-
-Jobs/Threads 	1/1
-TotalSeconds    65.037575
-
-Jobs/Threads  	1/256
-TotalSeconds    65.3446001
-
-Jobs/Threads 	256/1
-TotalSeconds    16.1439964
-
-Jobs/Threads	2/1
-TotalSeconds    39.8715172
-
-Jobs/Threads 	16/16
-TotalSeconds    16.2536195
-
-
+Parameters:
+-SourcePath: Source directory path.
+-DestinationPath: Destination directory path.
+-MaxJobs: Maximum number of parallel Robocopy jobs.
+-ThreadsPerJob: Number of Robocopy /MT threads per job.
+-EnableLogging: Shows normal Robocopy output. Omit it for silent/no-logging mode.
+-RetryCount: Robocopy /R retry count.
+-WaitSeconds: Robocopy /W wait time between retries.
+-DryRun: Adds Robocopy /L so actions are listed without writing to the destination.
 #>
 
-# User Editable Variables:
-$max_jobs = 12              # Change this to the number of parallel Robocopy jobs to run 
-$mthreads = 128              # Change this to the number of threads to use for each robocopy job (used with the /mt switch)
-$src = "X:\source"          # Set $src to a the local folder or share from which you want to copy the data
-$dest = "W:\destination"         # Set $dest to a local folder or share to which you want to copy the data
-$EnableLogging = $true     # Set to $true for normal logging, $false for silent/no-logging mode
+[CmdletBinding()]
+param(
+    [Alias('src')]
+    [Parameter()]
+    [string]$SourcePath = 'Z:\',
 
-# Display current configuration
-Write-Host "=== Robocopy Booster V2 - Configuration ===" -ForegroundColor Cyan
-Write-Host "Source Path: $src" -ForegroundColor White
-Write-Host "Destination Path: $dest" -ForegroundColor White
-Write-Host "Max Parallel Jobs: $max_jobs" -ForegroundColor White
-Write-Host "Threads per Job: $mthreads" -ForegroundColor White
-Write-Host "Logging Mode: $(if($EnableLogging){'Enabled (Normal)'}else{'Disabled (Silent)'})" -ForegroundColor $(if($EnableLogging){'Green'}else{'Yellow'})
-Write-Host "=============================================" -ForegroundColor Cyan
+    [Alias('dest')]
+    [Parameter()]
+    [string]$DestinationPath = 'C:\txtest',
 
-# Verify source path exists
-if (-not (Test-Path $src)) {
-    Write-Host "ERROR: Source path '$src' does not exist!" -ForegroundColor Red
+    [Alias('max_jobs')]
+    [Parameter()]
+    [ValidateRange(1, 256)]
+    [int]$MaxJobs = 12,
+
+    [Alias('mtreads', 'mtThreads', 'mthreads')]
+    [Parameter()]
+    [ValidateRange(1, 128)]
+    [int]$ThreadsPerJob = 128,
+
+    [Parameter()]
+    [switch]$EnableLogging,
+
+    [Parameter()]
+    [ValidateRange(0, 1000000)]
+    [int]$RetryCount = 1,
+
+    [Parameter()]
+    [ValidateRange(0, 1000000)]
+    [int]$WaitSeconds = 1,
+
+    [Parameter()]
+    [switch]$DryRun
+)
+
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = 'Stop'
+
+function Resolve-DirectoryPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter()]
+        [switch]$MustExist
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'Directory path cannot be empty.'
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            throw "Path is not a directory: $Path"
+        }
+
+        return (Resolve-Path -LiteralPath $Path).Path
+    }
+
+    if ($MustExist) {
+        throw "Directory does not exist: $Path"
+    }
+
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+function ConvertTo-ComparablePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $trimmed = $Path.TrimEnd([char[]]@('\', '/'))
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        return $Path
+    }
+
+    return $trimmed
+}
+
+function Test-IsChildPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ParentPath
+    )
+
+    $child = ConvertTo-ComparablePath -Path $Path
+    $parent = ConvertTo-ComparablePath -Path $ParentPath
+
+    return (
+        $child.StartsWith("$parent\", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $child.StartsWith("$parent/", [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Receive-BoosterJobs {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Jobs
+    )
+
+    $remainingJobs = @()
+
+    foreach ($job in $Jobs) {
+        if ($job.State -in @('Completed', 'Failed', 'Stopped')) {
+            $received = @(Receive-Job -Job $job -ErrorAction SilentlyContinue)
+
+            foreach ($item in $received) {
+                if ($null -ne $item -and $item.PSObject.Properties.Name -contains 'ExitCode') {
+                    $script:JobResults += $item
+                }
+            }
+
+            if ($job.State -ne 'Completed') {
+                $script:JobResults += [pscustomobject]@{
+                    Name        = $job.Name
+                    Source      = ''
+                    Destination = ''
+                    ExitCode    = 16
+                    CompletedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    Speed       = ''
+                    Status      = $job.State
+                }
+            }
+
+            Remove-Job -Job $job -Force
+        }
+        else {
+            $remainingJobs += $job
+        }
+    }
+
+    return $remainingJobs
+}
+
+$robocopyCommand = Get-Command robocopy.exe -ErrorAction SilentlyContinue
+if (-not $robocopyCommand) {
+    $robocopyCommand = Get-Command robocopy -ErrorAction SilentlyContinue
+}
+
+if (-not $robocopyCommand) {
+    Write-Error 'Robocopy was not found. Run this script on Windows with Robocopy available in PATH.'
     exit 1
 }
 
-# Create destination path if it doesn't exist
-if (-not (Test-Path $dest)) {
-    Write-Host "Creating destination path: $dest" -ForegroundColor Yellow
-    New-Item -ItemType Directory -Path $dest -Force | Out-Null
+$resolvedSource = Resolve-DirectoryPath -Path $SourcePath -MustExist
+$resolvedDestination = Resolve-DirectoryPath -Path $DestinationPath
+$sourceCompare = ConvertTo-ComparablePath -Path $resolvedSource
+$destinationCompare = ConvertTo-ComparablePath -Path $resolvedDestination
+
+if ($sourceCompare.Equals($destinationCompare, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error 'SourcePath and DestinationPath resolve to the same directory. Choose a separate destination.'
+    exit 1
 }
 
-# Script execution
-$tstart = Get-Date 
-Write-Host "Starting parallel robocopy operations at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Green
+if (Test-IsChildPath -Path $resolvedDestination -ParentPath $resolvedSource) {
+    Write-Error 'DestinationPath must not be inside SourcePath because that would create or update files under the source tree.'
+    exit 1
+}
 
-# Check for files in the root directory
-$rootFiles = Get-ChildItem $src -File
-$directories = Get-ChildItem $src -Directory
+$destinationItem = Get-Item -LiteralPath $resolvedDestination -Force -ErrorAction SilentlyContinue
+if ($null -ne $destinationItem -and (($destinationItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    Write-Error 'DestinationPath must not be a reparse point, junction, or symlink. Use the real destination path to avoid writing through a link.'
+    exit 1
+}
 
-Write-Host "Found $($rootFiles.Count) files in root directory" -ForegroundColor Cyan
-Write-Host "Found $($directories.Count) subdirectories to process" -ForegroundColor Cyan
+if (-not $DryRun -and -not (Test-Path -LiteralPath $resolvedDestination)) {
+    New-Item -ItemType Directory -Path $resolvedDestination -Force | Out-Null
+}
+
+$rootFiles = @(Get-ChildItem -LiteralPath $resolvedSource -File -Force)
+$allDirectories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory -Force)
+$directories = @($allDirectories | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0 })
+$skippedReparseDirectories = @($allDirectories | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 })
+
+Write-Host '=== Robocopy Booster V2 - Configuration ===' -ForegroundColor Cyan
+Write-Host "Source Path: $resolvedSource" -ForegroundColor White
+Write-Host "Destination Path: $resolvedDestination" -ForegroundColor White
+Write-Host "Max Parallel Jobs: $MaxJobs" -ForegroundColor White
+Write-Host "Threads per Job: $ThreadsPerJob" -ForegroundColor White
+Write-Host "Retry/Wait: /R:$RetryCount /W:$WaitSeconds" -ForegroundColor White
+Write-Host "Logging Mode: $(if ($EnableLogging) { 'Enabled' } else { 'Silent' })" -ForegroundColor $(if ($EnableLogging) { 'Green' } else { 'Yellow' })
+Write-Host "Dry Run: $($DryRun.IsPresent)" -ForegroundColor White
+Write-Host 'Sync Mode: source-to-destination copy/update only; no source deletes, moves, or renames.' -ForegroundColor Green
+Write-Host 'Destination extras are left in place; this is not a mirror/purge operation.' -ForegroundColor Green
+Write-Host '===========================================' -ForegroundColor Cyan
+
+Write-Host "Found $($rootFiles.Count) root file(s)." -ForegroundColor Cyan
+Write-Host "Found $($directories.Count) top-level director$(if ($directories.Count -eq 1) { 'y' } else { 'ies' }) to process." -ForegroundColor Cyan
+if ($skippedReparseDirectories.Count -gt 0) {
+    Write-Host "Skipped $($skippedReparseDirectories.Count) top-level reparse director$(if ($skippedReparseDirectories.Count -eq 1) { 'y' } else { 'ies' })." -ForegroundColor Yellow
+}
 
 if ($rootFiles.Count -eq 0 -and $directories.Count -eq 0) {
-    Write-Host "WARNING: No files or subdirectories found in source path '$src'" -ForegroundColor Yellow
-    Write-Host "Nothing to copy. Exiting." -ForegroundColor Red
+    Write-Host "No files or directories found in source path '$resolvedSource'. Nothing to copy." -ForegroundColor Yellow
     exit 0
 }
 
-# Create array to track all jobs
-$allJobs = @()
+$commonOptions = @(
+    '/XJ',
+    '/COPY:DAT',
+    '/DCOPY:DAT',
+    "/R:$RetryCount",
+    "/W:$WaitSeconds",
+    "/MT:$ThreadsPerJob"
+)
 
-# If there are root files, create a job to copy them
+if ($DryRun) {
+    $commonOptions += '/L'
+}
+
+if (-not $EnableLogging) {
+    $commonOptions += @('/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/NC', '/NS', '/LOG:NUL')
+}
+
+$directoryOptions = @('/E') + $commonOptions
+$rootFileOptions = $commonOptions
+
+$workItems = @()
 if ($rootFiles.Count -gt 0) {
-    Write-Host "Creating job for root directory files..." -ForegroundColor Yellow
-    
-    $RootScriptBlock = {
-        param($src, $dest, $mthreads, $EnableLogging)
-        
-        # Build robocopy command for root files only (not subdirectories)
-        if ($EnableLogging) {
-            # Normal logging mode - copy only files, not subdirectories
-            Write-Host "Processing Root Files (Normal): $(Split-Path $src -Leaf)" -ForegroundColor White
-            $result = robocopy $src $dest /LEV:1 /COPY:DAT /R:1 /W:1 /MT:$mthreads
-        } else {
-            # Silent/no-logging mode for performance testing - copy only files, not subdirectories
-            Write-Host "Processing Root Files (Silent): $(Split-Path $src -Leaf)" -ForegroundColor Gray
-            $result = robocopy $src $dest /LEV:1 /COPY:DAT /R:0 /W:0 /MT:$mthreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
-        }
-        
-        # Return job completion info
-        $exitCode = $LASTEXITCODE
-        $timestamp = Get-Date -Format 'HH:mm:ss'
-        
-        # Parse speed from robocopy output when logging is enabled
-        $speed = ""
-        if ($EnableLogging -and $result) {
-            $speedLine = $result | Where-Object { $_ -match "Bytes/sec" } | Select-Object -First 1
-            if ($speedLine -match "([\d.,]+)\s+Bytes/sec") {
-                $bytesPerSec = ($Matches[1]) -replace '[,.]', ''
-                $mbPerSec = [math]::Round([double]$bytesPerSec / 1MB, 2)
-                $speed = "$mbPerSec MB/s"
-            }
-        }
-        $speedInfo = if ($speed) { " - $speed" } else { "" }
-        
-        if ($exitCode -le 3) {
-            Write-Host "[$timestamp] Completed: Root Files (Exit Code: $exitCode)$speedInfo" -ForegroundColor Green
-        } else {
-            Write-Host "[$timestamp] Warning/Error: Root Files (Exit Code: $exitCode)$speedInfo" -ForegroundColor Yellow
-        }
-        
-        return @{
-            Name = "Root Files"
-            ExitCode = $exitCode
-            Timestamp = $timestamp
-            Speed = $speed
-        }
+    $workItems += [pscustomobject]@{
+        Name          = 'Root files'
+        Source        = $resolvedSource
+        Destination   = $resolvedDestination
+        RootFilesOnly = $true
+        Options       = $rootFileOptions
     }
-    
-    # Start the root files job
-    $rootJob = Start-Job -ScriptBlock $RootScriptBlock -ArgumentList $src, $dest, $mthreads, $EnableLogging
-    $allJobs += $rootJob
 }
 
-# Process subdirectories in parallel
-$directories | ForEach-Object {
-    $ScriptBlock = {
-        param($name, $src, $dest, $mthreads, $EnableLogging)
-        
-        # Remove the final character from $name if it is a backslash
-        if ($name.EndsWith("\")) {
-            $name = $name.Substring(0, $name.Length - 1)
-        }
-        
-        $srcPath = Join-Path -Path $src -ChildPath $name
-        $destPath = Join-Path -Path $dest -ChildPath $name
-          # Build robocopy command based on logging preference
-        if ($EnableLogging) {
-            # Normal logging mode
-            Write-Host "Processing (Normal): $name" -ForegroundColor White
-            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:1 /W:1 /MT:$mthreads
-        } else {
-            # Silent/no-logging mode for performance testing
-            Write-Host "Processing (Silent): $name" -ForegroundColor Gray
-            $result = robocopy $srcPath $destPath /E /COPY:DAT /DCOPY:T /R:0 /W:0 /MT:$mthreads /NFL /NDL /NJH /NJS /NP /NC /NS /LOG:NUL
-        }
-        
-        # Return job completion info
-        $exitCode = $LASTEXITCODE
-        $timestamp = Get-Date -Format 'HH:mm:ss'
-        
-        # Parse speed from robocopy output when logging is enabled
-        $speed = ""
-        if ($EnableLogging -and $result) {
-            $speedLine = $result | Where-Object { $_ -match "Bytes/sec" } | Select-Object -First 1
-            if ($speedLine -match "([\d.,]+)\s+Bytes/sec") {
-                $bytesPerSec = ($Matches[1]) -replace '[,.]', ''
-                $mbPerSec = [math]::Round([double]$bytesPerSec / 1MB, 2)
-                $speed = "$mbPerSec MB/s"
-            }
-        }
-        $speedInfo = if ($speed) { " - $speed" } else { "" }
-        
-        if ($exitCode -le 3) {
-            Write-Host "[$timestamp] Completed: $name (Exit Code: $exitCode)$speedInfo" -ForegroundColor Green
-        } else {
-            Write-Host "[$timestamp] Warning/Error: $name (Exit Code: $exitCode)$speedInfo" -ForegroundColor Yellow
-        }
-        
-        return @{
-            Name = $name
-            ExitCode = $exitCode
-            Timestamp = $timestamp
-            Speed = $speed
+foreach ($directory in $directories) {
+    $workItems += [pscustomobject]@{
+        Name          = $directory.Name
+        Source        = $directory.FullName
+        Destination   = Join-Path -Path $resolvedDestination -ChildPath $directory.Name
+        RootFilesOnly = $false
+        Options       = $directoryOptions
+    }
+}
+
+$copyJobScript = {
+    param(
+        [string]$JobName,
+        [string]$JobSource,
+        [string]$JobDestination,
+        [bool]$RootFilesOnly,
+        [string[]]$RobocopyOptions,
+        [string]$RobocopyPath,
+        [bool]$ShowRobocopyOutput
+    )
+
+    $robocopyArguments = if ($RootFilesOnly) {
+        @($JobSource, $JobDestination, '*') + $RobocopyOptions
+    }
+    else {
+        @($JobSource, $JobDestination) + $RobocopyOptions
+    }
+
+    Write-Host "Starting: $JobName" -ForegroundColor White
+    $robocopyOutput = @()
+    if ($ShowRobocopyOutput) {
+        $robocopyOutput = @(& $RobocopyPath @robocopyArguments)
+        $robocopyOutput | ForEach-Object { Write-Host $_ }
+    }
+    else {
+        & $RobocopyPath @robocopyArguments | Out-Null
+    }
+    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+
+    $speed = ''
+    if ($ShowRobocopyOutput -and $robocopyOutput.Count -gt 0) {
+        $speedLine = $robocopyOutput | Where-Object { $_ -match 'Bytes/sec' } | Select-Object -First 1
+        if ($speedLine -match '([\d,]+(?:\.\d+)?)\s+Bytes/sec') {
+            $bytesPerSecond = ($Matches[1] -replace ',', '')
+            $speed = "$([math]::Round(([double]$bytesPerSecond / 1MB), 2)) MB/s"
         }
     }
-    
-    # Job throttling - wait if we have too many running jobs
-    while (@($allJobs | Where-Object { $_.State -eq "Running" }).Count -ge $max_jobs) {
+
+    $speedInfo = if ([string]::IsNullOrWhiteSpace($speed)) { '' } else { " - $speed" }
+    $color = if ($exitCode -ge 8) { 'Red' } elseif ($exitCode -ge 4) { 'Yellow' } else { 'Green' }
+    Write-Host "Completed: $JobName (Robocopy exit code: $exitCode)$speedInfo" -ForegroundColor $color
+
+    [pscustomobject]@{
+        Name        = $JobName
+        Source      = $JobSource
+        Destination = $JobDestination
+        ExitCode    = $exitCode
+        CompletedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Speed       = $speed
+        Status      = 'Completed'
+    }
+}
+
+$startTime = Get-Date
+$activeJobs = @()
+$script:JobResults = @()
+$totalJobs = $workItems.Count
+
+foreach ($workItem in $workItems) {
+    while ($activeJobs.Count -ge $MaxJobs) {
         Start-Sleep -Milliseconds 250
+        $activeJobs = @(Receive-BoosterJobs -Jobs $activeJobs)
+
+        $completedCount = $script:JobResults.Count
+        $percentComplete = [math]::Min(100, [math]::Round(($completedCount / $totalJobs) * 100, 1))
+        Write-Progress -Activity 'Processing Robocopy jobs' -Status "Completed $completedCount of $totalJobs" -PercentComplete $percentComplete
     }
-    
-    # Start new job
-    $newJob = Start-Job -ScriptBlock $ScriptBlock -ArgumentList $_.Name, $src, $dest, $mthreads, $EnableLogging
-    $allJobs += $newJob
+
+    $jobName = "RobocopyBoosterV2-$($workItem.Name)-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $activeJobs += Start-Job -Name $jobName -ScriptBlock $copyJobScript -ArgumentList @(
+        $workItem.Name,
+        $workItem.Source,
+        $workItem.Destination,
+        $workItem.RootFilesOnly,
+        $workItem.Options,
+        $robocopyCommand.Source,
+        $EnableLogging.IsPresent
+    )
 }
 
-# Wait for all jobs to complete and collect results
-Write-Host "Waiting for all jobs to complete..." -ForegroundColor Cyan
-$totalExpectedJobs = $allJobs.Count
-Write-Host "Total jobs to process: $totalExpectedJobs" -ForegroundColor Cyan
+while ($activeJobs.Count -gt 0) {
+    Start-Sleep -Milliseconds 500
+    $activeJobs = @(Receive-BoosterJobs -Jobs $activeJobs)
 
-while (@($allJobs | Where-Object { $_.State -eq "Running" }).Count -gt 0) {
-    $runningCount = @($allJobs | Where-Object { $_.State -eq "Running" }).Count
-    $completedCount = @($allJobs | Where-Object { $_.State -ne "Running" }).Count
-    
-    if ($totalExpectedJobs -gt 0) {
-        $percentComplete = [math]::Round(($completedCount / $totalExpectedJobs) * 100, 1)
-        Write-Progress -Activity "Processing Robocopy Jobs" -Status "Running: $runningCount, Completed: $completedCount of $totalExpectedJobs" -PercentComplete $percentComplete
-    }
-    
-    Start-Sleep -Seconds 1
+    $completedCount = $script:JobResults.Count
+    $percentComplete = [math]::Min(100, [math]::Round(($completedCount / $totalJobs) * 100, 1))
+    Write-Progress -Activity 'Processing Robocopy jobs' -Status "Completed $completedCount of $totalJobs" -PercentComplete $percentComplete
 }
 
-Write-Progress -Activity "Processing Robocopy Jobs" -Completed
+Write-Progress -Activity 'Processing Robocopy jobs' -Completed
 
-# Collect all results and clean up
-$jobResults = @($allJobs | Receive-Job)
-$allJobs | Remove-Job -Force
+$duration = New-TimeSpan -Start $startTime -End (Get-Date)
+$successfulJobs = @($script:JobResults | Where-Object { $_.ExitCode -lt 4 }).Count
+$warningJobs = @($script:JobResults | Where-Object { $_.ExitCode -ge 4 -and $_.ExitCode -lt 8 }).Count
+$errorJobs = @($script:JobResults | Where-Object { $_.ExitCode -ge 8 }).Count
+$maxExitCode = if ($script:JobResults.Count -gt 0) {
+    ($script:JobResults | Measure-Object -Property ExitCode -Maximum).Maximum
+}
+else {
+    0
+}
+$speedResults = @($script:JobResults | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Speed) })
 
-# Calculate execution time and display results
-$tend = Get-Date 
-$duration = New-TimeSpan -Start $tstart -End $tend
+Write-Host ''
+Write-Host '=== Robocopy Booster V2 - Results ===' -ForegroundColor Cyan
+Write-Host "Total Execution Time: $($duration.Hours)h $($duration.Minutes)m $($duration.Seconds)s" -ForegroundColor Green
+Write-Host "Jobs Executed: $totalJobs" -ForegroundColor White
+Write-Host "Root Files Job: $(if ($rootFiles.Count -gt 0) { "Yes ($($rootFiles.Count) file(s))" } else { 'No' })" -ForegroundColor White
+Write-Host "Directories Processed: $($directories.Count)" -ForegroundColor White
+Write-Host "Successful Jobs (0-3): $successfulJobs" -ForegroundColor Green
+Write-Host "Warning Jobs (4-7): $warningJobs" -ForegroundColor Yellow
+Write-Host "Error Jobs (8+): $errorJobs" -ForegroundColor Red
+Write-Host "Highest Robocopy Exit Code: $maxExitCode" -ForegroundColor White
+Write-Host "Logging Mode Used: $(if ($EnableLogging) { 'Enabled' } else { 'Silent' })" -ForegroundColor $(if ($EnableLogging) { 'Green' } else { 'Yellow' })
+if ($speedResults.Count -gt 0) {
+    Write-Host "Jobs with reported speed: $($speedResults.Count)" -ForegroundColor White
+}
+Write-Host '=====================================' -ForegroundColor Cyan
 
-Write-Host "`n=== Robocopy Booster V2 - Results ===" -ForegroundColor Cyan
-Write-Host "Total Execution Time: $($duration.Hours)h $($duration.Minutes)m $($duration.Seconds)s $($duration.Milliseconds)ms" -ForegroundColor Green
-Write-Host "Total Directories Processed: $($directories.Count)" -ForegroundColor White
-Write-Host "Root Files Job: $(if($rootFiles.Count -gt 0){"Yes ($($rootFiles.Count) files)"}else{"No"})" -ForegroundColor White
-Write-Host "Total Jobs Executed: $totalExpectedJobs" -ForegroundColor White
-Write-Host "Logging Mode Used: $(if($EnableLogging){'Normal'}else{'Silent'})" -ForegroundColor $(if($EnableLogging){'Green'}else{'Yellow'})
-Write-Host "Max Parallel Jobs: $max_jobs" -ForegroundColor White
-Write-Host "Threads per Job: $mthreads" -ForegroundColor White
-
-# Display job results summary
-if ($jobResults.Count -gt 0) {
-    $successfulJobs = @($jobResults | Where-Object { $_.ExitCode -le 3 }).Count
-    $warningJobs = @($jobResults | Where-Object { $_.ExitCode -gt 3 -and $_.ExitCode -lt 8 }).Count
-    $errorJobs = @($jobResults | Where-Object { $_.ExitCode -ge 8 }).Count
-    
-    Write-Host "`nJob Results Summary:" -ForegroundColor Cyan
-    Write-Host "  Successful: $successfulJobs" -ForegroundColor Green
-    Write-Host "  Warnings: $warningJobs" -ForegroundColor Yellow
-    Write-Host "  Errors: $errorJobs" -ForegroundColor Red
+if ($maxExitCode -ge 8) {
+    exit 1
 }
 
-Write-Host "=====================================" -ForegroundColor Cyan
+exit 0
