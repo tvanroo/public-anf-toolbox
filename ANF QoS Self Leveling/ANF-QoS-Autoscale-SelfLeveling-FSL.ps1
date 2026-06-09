@@ -202,6 +202,17 @@ function Resolve-AnfThroughputMibpsFromProperties {
     }
     return $null
 }
+function Convert-ToWholeThroughputMibps {
+    param(
+        [Parameter(Mandatory=$true)][double]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+    $rounded = [int][math]::Round($Value, 0, [System.MidpointRounding]::AwayFromZero)
+    if ($rounded -lt $Minimum) {
+        return $Minimum
+    }
+    return $rounded
+}
 function Invoke-AnfArmJson {
     param(
         [Parameter(Mandatory=$true)][string]$Method,
@@ -229,6 +240,60 @@ function Invoke-AnfArmJson {
         return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $BodyJson -ErrorAction Stop
     }
     return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+}
+function Get-AnfRestErrorDetails {
+    param(
+        [Parameter(Mandatory=$true)][object]$ErrorRecord
+    )
+    $errorCode = $null
+    $errorMessage = $null
+    if ($ErrorRecord.Exception -and $ErrorRecord.Exception.Response) {
+        try {
+            $stream = $ErrorRecord.Exception.Response.GetResponseStream()
+            if ($stream) {
+                $reader = New-Object System.IO.StreamReader($stream)
+                $responseText = $reader.ReadToEnd()
+                if ($responseText) {
+                    try {
+                        $responseJson = $responseText | ConvertFrom-Json -ErrorAction Stop
+                        if ($responseJson.error) {
+                            $errorCode = $responseJson.error.code
+                            $errorMessage = $responseJson.error.message
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+
+    if (-not $errorMessage) {
+        $errorMessage = $ErrorRecord.Exception.Message
+    }
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $errorDetailsMessage = "$($ErrorRecord.ErrorDetails.Message)"
+        if ($errorDetailsMessage) {
+            try {
+                $errorDetailsJson = $errorDetailsMessage | ConvertFrom-Json -ErrorAction Stop
+                if ($errorDetailsJson.error) {
+                    if (-not $errorCode -and $errorDetailsJson.error.code) {
+                        $errorCode = $errorDetailsJson.error.code
+                    }
+                    if ($errorDetailsJson.error.message) {
+                        $errorMessage = $errorDetailsJson.error.message
+                    }
+                }
+            } catch {
+                if (-not $errorMessage -or $errorMessage -match "Bad Request") {
+                    $errorMessage = $errorDetailsMessage
+                }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Code = $errorCode
+        Message = $errorMessage
+    }
 }
 
 function Get-AnfPool {
@@ -374,9 +439,10 @@ function Set-AnfVolumeThroughput {
         [Parameter(Mandatory=$true)][double]$TargetThroughputMibps
     )
 
+    $targetWholeMibps = Convert-ToWholeThroughputMibps -Value $TargetThroughputMibps -Minimum 1
     $payload = @{
         properties = @{
-            throughputMibps = [math]::Round($TargetThroughputMibps, 3)
+            throughputMibps = $targetWholeMibps
         }
     } | ConvertTo-Json -Depth 4
     $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $VolumeObject.Id -ApiVersion $anfApiVersion -BodyJson $payload
@@ -488,27 +554,12 @@ function Update-FslPoolThroughputMibps {
         [Parameter(Mandatory=$true)][double]$TargetThroughputMibps
     )
 
-    $targetRounded = [math]::Round($TargetThroughputMibps, 3)
-    $context = Get-AzContext -ErrorAction Stop
-    $resourceManagerUrl = $context.Environment.ResourceManagerUrl.TrimEnd('/')
-    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate(
-        $context.Account,
-        $context.Environment,
-        $context.Tenant.Id,
-        $null,
-        "Never",
-        $null,
-        "$resourceManagerUrl/"
-    ).AccessToken
-    $apiVersion = "2024-07-01-preview"
-    $uri = "$resourceManagerUrl$PoolResourceId" + "?api-version=$apiVersion"
-    $headers = @{
-        'Authorization' = "Bearer $token"
-        'Content-Type' = 'application/json'
-    }
-
-    $propertyCandidates = @("provisionedThroughputMibps", "totalThroughputMibps")
-    $lastError = $null
+    $targetRounded = Convert-ToWholeThroughputMibps -Value $TargetThroughputMibps -Minimum 0
+    $poolUpdateApiVersion = "2024-07-01-preview"
+    $propertyCandidates = @("customThroughputMibps", "provisionedThroughputMibps", "totalThroughputMibps")
+    $lastErrorDetails = $null
+    $sawCooldownOrDeferredDecreaseSignal = $false
+    $deferredDecreaseMessage = $null
     foreach ($propertyName in $propertyCandidates) {
         try {
             $body = @{
@@ -516,15 +567,37 @@ function Update-FslPoolThroughputMibps {
                     $propertyName = $targetRounded
                 }
             } | ConvertTo-Json -Depth 3
-
-            $null = Invoke-RestMethod -Uri $uri -Method PATCH -Body $body -Headers $headers -ErrorAction Stop
+            $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $poolUpdateApiVersion -BodyJson $body
             return
         } catch {
-            $lastError = $_
+            $lastErrorDetails = Get-AnfRestErrorDetails -ErrorRecord $_
+            $lastErrorMessage = "$($lastErrorDetails.Message)"
+            if (
+                $lastErrorDetails.Code -eq "PoolCustomThroughputCanNotBeDecreasedDuringCoolDownPeriod" -or
+                $lastErrorMessage -match "cool.?down"
+            ) {
+                $sawCooldownOrDeferredDecreaseSignal = $true
+                if (-not $deferredDecreaseMessage) {
+                    $deferredDecreaseMessage = $lastErrorMessage
+                }
+            }
         }
     }
 
-    throw "Failed to update pool throughput to $targetRounded MiB/s via REST API. Last error: $($lastError.Exception.Message)"
+    if ($sawCooldownOrDeferredDecreaseSignal) {
+        throw "Failed to update pool throughput to $targetRounded MiB/s via REST API. code='PoolCustomThroughputCanNotBeDecreasedDuringCoolDownPeriod' message='$deferredDecreaseMessage'"
+    }
+
+    $detailSuffix = ""
+    if ($lastErrorDetails) {
+        if ($lastErrorDetails.Code) {
+            $detailSuffix = " code='$($lastErrorDetails.Code)'"
+        }
+        if ($lastErrorDetails.Message) {
+            $detailSuffix = "$detailSuffix message='$($lastErrorDetails.Message)'"
+        }
+    }
+    throw "Failed to update pool throughput to $targetRounded MiB/s via REST API.$detailSuffix"
 }
 # Flexible Service Level pools must be Manual QoS
 if ($capacityPoolQosType -ne "Manual") {
@@ -713,14 +786,13 @@ $totalVolumeQty = $managedVolumes.Count
 Write-Output "Equilibrium goal: keep each volume's throughputLimitReached near threshold $throughputLimitMetricAllowance (above threshold = increase candidate, at/below threshold = decrease candidate subject to clean-window gate)."
 Write-Output "Threshold distribution: above=$($nonPerformantVolumes.Count); at-or-below=$($performantVolumes.Count); total=$totalVolumeQty."
 
-# For each volume calculate the amount of space it can give up, if any, and add it as a property called "SpaceToGiveUp"
+# For each volume calculate the amount of throughput it can give up, if any, and add it as a property called "ThroughputToGiveUpMibps"
 $finalData = $finalData | ForEach-Object {
+    $_ | Add-Member -MemberType NoteProperty -Name ThroughputToGiveUpMibps -Value 0 -Force
     if ($_.ShortName -eq "unallocated") {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = $_.CurrentThroughputMibps
+        $_.ThroughputToGiveUpMibps = $_.CurrentThroughputMibps
     } elseif ($_.Performant -eq "Yes" -and $_.CurrentThroughputMibps -gt 1) {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = [math]::Round(
+        $_.ThroughputToGiveUpMibps = [math]::Round(
             [math]::Min(
                 ($_.CurrentThroughputMibps * $levelingAgressionPercent / 100),
                 ($_.CurrentThroughputMibps - $minimumThroughputPerVolume)
@@ -728,8 +800,7 @@ $finalData = $finalData | ForEach-Object {
             3
         )
     } elseif ($nonPerformantVolumes.Count -eq $totalVolumeQty) {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = [math]::Round(
+        $_.ThroughputToGiveUpMibps = [math]::Round(
             [math]::Min(
                 ($_.CurrentThroughputMibps * $levelingAgressionPercent / 100),
                 ($_.CurrentThroughputMibps - $minimumThroughputPerVolume)
@@ -743,8 +814,8 @@ $finalData = $finalData | ForEach-Object {
 $totalVolumeQty = $managedVolumes.Count
 $capacityPoolMaxThroughput = $capacityPoolManagedThroughput
 $totalminimumThroughputAllocated = [math]::Round($totalVolumeQty * $minimumThroughputPerVolume, 3)
-$totalAvailableSpaceToGiveUp = [math]::Round(($finalData | Measure-Object -Property SpaceToGiveUp -Sum).Sum, 3)
-$capacityPoolRemainingThroughputToAllocate = [math]::Round($capacityPoolMaxThroughput - $totalAvailableSpaceToGiveUp, 3)
+$totalAvailableThroughputToGiveUpMibps = [math]::Round(($finalData | Measure-Object -Property ThroughputToGiveUpMibps -Sum).Sum, 3)
+$capacityPoolRemainingThroughputToAllocate = [math]::Round($capacityPoolMaxThroughput - $totalAvailableThroughputToGiveUpMibps, 3)
 $totalThroughputLimitMetric = [math]::Round(($finalData | Measure-Object -Property ThroughputLimitMetric -Sum).Sum, 3)
 $applyZeroPressureDecreases = ($totalThroughputLimitMetric -eq 0)
 if ($applyZeroPressureDecreases) {
@@ -777,10 +848,10 @@ $finalData | ForEach-Object {
             if ($_.Performant -eq "Yes" -and $_.CurrentThroughputMibps -lt 1) {
                 $_.NewThroughputValue = 1
             } else {
-                $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.SpaceToGiveUp) + ($totalAvailableSpaceToGiveUp * $_.throughputPercentage / 100), 3)
+                $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.ThroughputToGiveUpMibps) + ($totalAvailableThroughputToGiveUpMibps * $_.throughputPercentage / 100), 3)
             }
         } elseif ($nonPerformantVolumes.Count -eq $totalVolumeQty) {
-            $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.SpaceToGiveUp) + ($totalAvailableSpaceToGiveUp * $_.throughputPercentage / 100), 3)
+            $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.ThroughputToGiveUpMibps) + ($totalAvailableThroughputToGiveUpMibps * $_.throughputPercentage / 100), 3)
         } else {
             $_.NewThroughputValue = 0
         }
@@ -788,13 +859,22 @@ $finalData | ForEach-Object {
         if ($_.ShortName -eq "unallocated") {
             $_.NewThroughputValue = 0
         } elseif ($_.CleanLastNFullDays -and $_.CurrentThroughputMibps -gt $minimumThroughputPerVolume) {
-            $_.NewThroughputValue = [math]::Round([math]::Max($minimumThroughputPerVolume, ($_.CurrentThroughputMibps - $_.SpaceToGiveUp)), 3)
+            $_.NewThroughputValue = [math]::Round([math]::Max($minimumThroughputPerVolume, ($_.CurrentThroughputMibps - $_.ThroughputToGiveUpMibps)), 3)
         } else {
             $_.NewThroughputValue = $_.CurrentThroughputMibps
         }
     }
 }
+# Normalize target throughput values to whole MiB/s before planning and API calls
+$finalData | ForEach-Object {
+    if ($_.ShortName -eq "unallocated") {
+        $_.NewThroughputValue = 0
+    } else {
+        $_.NewThroughputValue = Convert-ToWholeThroughputMibps -Value $_.NewThroughputValue -Minimum $minimumThroughputPerVolume
+    }
+}
 
+# Add NetChangeInThroughputMibs to each object
 # Add NetChangeInThroughputMibs to each object
 $finalData = $finalData | ForEach-Object {
     $_ | Add-Member -MemberType NoteProperty -Name NetChangeInThroughputMibs -Value 0 -Force
@@ -810,7 +890,7 @@ $finalData | ForEach-Object {
     }
 }
 foreach ($volume in ($finalData | Where-Object { $_.ShortName -ne "unallocated" })) {
-    Write-Output "Decision snapshot: volume=$($volume.ShortName); metric=$($volume.ThroughputLimitMetric); performant=$($volume.Performant); cleanWindowMet=$($volume.CleanLastNFullDays); current=$($volume.CurrentThroughputMibps); spaceToGive=$($volume.SpaceToGiveUp); proposed=$($volume.NewThroughputValue); netChange=$($volume.NetChangeInThroughputMibs)."
+    Write-Output "Decision snapshot: volume=$($volume.ShortName); metric=$($volume.ThroughputLimitMetric); performant=$($volume.Performant); cleanWindowMet=$($volume.CleanLastNFullDays); current=$($volume.CurrentThroughputMibps); throughputToGiveUpMibps=$($volume.ThroughputToGiveUpMibps); proposed=$($volume.NewThroughputValue); netChange=$($volume.NetChangeInThroughputMibs)."
 }
 
 # Prevent throughput decreases unless the last N full 24-hour periods were clean
@@ -825,12 +905,42 @@ $finalData | ForEach-Object {
 if ($suppressedDecreaseCount -gt 0) {
     Write-Output "Decrease gate applied: suppressed $suppressedDecreaseCount planned decrease(s) because clean-window requirement was not met (required clean windows: $decreaseRequiredCleanDays; threshold <= $throughputLimitMetricAllowance)."
 }
-
-# Calculate planned managed target throughput and resulting pool target throughput
-$plannedManagedTargetThroughputMibps = [math]::Round((($finalData | Where-Object { $_.ShortName -ne "unallocated" } | Measure-Object -Property NewThroughputValue -Sum).Sum), 3)
-$plannedPoolTargetThroughputMibps = [math]::Round(($excludedThroughputMibps + $plannedManagedTargetThroughputMibps), 3)
+$plannedManagedTargetThroughputMibps = [int](($finalData | Where-Object { $_.ShortName -ne "unallocated" } | Measure-Object -Property NewThroughputValue -Sum).Sum)
+$plannedPoolTargetThroughputMibps = Convert-ToWholeThroughputMibps -Value ($excludedThroughputMibps + $plannedManagedTargetThroughputMibps) -Minimum 0
+$minimumManagedTargetThroughputMibps = [int][math]::Max(0, [math]::Ceiling($minimumPoolThroughputMibps - $excludedThroughputMibps))
+$appliedPoolMinimumRedistribution = $false
 if ($plannedPoolTargetThroughputMibps -lt $minimumPoolThroughputMibps) {
     $plannedPoolTargetThroughputMibps = $minimumPoolThroughputMibps
+    $requiredManagedIncreaseMibps = [int][math]::Max(0, ($minimumManagedTargetThroughputMibps - $plannedManagedTargetThroughputMibps))
+    $managedRows = @($finalData | Where-Object { $_.ShortName -ne "unallocated" })
+    if ($requiredManagedIncreaseMibps -gt 0 -and $managedRows.Count -gt 0) {
+        $baseShareIncreaseMibps = [int][math]::Floor($requiredManagedIncreaseMibps / $managedRows.Count)
+        $remainderIncreaseMibps = $requiredManagedIncreaseMibps % $managedRows.Count
+        for ($i = 0; $i -lt $managedRows.Count; $i++) {
+            $volumeIncreaseMibps = $baseShareIncreaseMibps
+            if ($i -lt $remainderIncreaseMibps) {
+                $volumeIncreaseMibps += 1
+            }
+            $managedRows[$i].NewThroughputValue = Convert-ToWholeThroughputMibps -Value ($managedRows[$i].NewThroughputValue + $volumeIncreaseMibps) -Minimum $minimumThroughputPerVolume
+        }
+        $appliedPoolMinimumRedistribution = $true
+        Write-Output "Pool minimum floor applied: planned total was below $minimumPoolThroughputMibps MiB/s, so excess managed throughput ($requiredManagedIncreaseMibps MiB/s) was distributed evenly across $($managedRows.Count) managed volume(s)."
+    }
+    $plannedManagedTargetThroughputMibps = [int](($finalData | Where-Object { $_.ShortName -ne "unallocated" } | Measure-Object -Property NewThroughputValue -Sum).Sum)
+    $plannedPoolTargetThroughputMibps = Convert-ToWholeThroughputMibps -Value ($excludedThroughputMibps + $plannedManagedTargetThroughputMibps) -Minimum $minimumPoolThroughputMibps
+}
+
+$finalData | ForEach-Object {
+    if ($_.ShortName -ne "unallocated") {
+        $_.NetChangeInThroughputMibs = [math]::Round($_.NewThroughputValue - $_.CurrentThroughputMibps, 0)
+    } else {
+        $_.NetChangeInThroughputMibs = 0
+    }
+}
+if ($appliedPoolMinimumRedistribution) {
+    foreach ($volume in ($finalData | Where-Object { $_.ShortName -ne "unallocated" })) {
+        Write-Output "Adjusted target after pool-floor distribution: volume=$($volume.ShortName); current=$($volume.CurrentThroughputMibps); adjustedProposed=$($volume.NewThroughputValue); adjustedNetChange=$($volume.NetChangeInThroughputMibs)."
+    }
 }
 $poolThroughputDeltaMibps = [math]::Round(($plannedPoolTargetThroughputMibps - $capacityPoolMaxThroughput), 3)
 Write-Host "Planned pool throughput target: Current=$capacityPoolMaxThroughput MiB/s, Target=$plannedPoolTargetThroughputMibps MiB/s" -ForegroundColor Cyan
@@ -907,9 +1017,26 @@ if ((($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure
                 Write-Host "Skipping pool throughput decrease because one or more volume updates did not complete successfully." -ForegroundColor Yellow
             } else {
                 Write-Host "Decreasing pool throughput after volume updates: $capacityPoolMaxThroughput -> $plannedPoolTargetThroughputMibps MiB/s" -ForegroundColor Yellow
-                Update-FslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $plannedPoolTargetThroughputMibps
-                $anfPool = Get-AnfPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
-                $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
+                try {
+                    Update-FslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $plannedPoolTargetThroughputMibps
+                    $anfPool = Get-AnfPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
+                    $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
+                } catch {
+                    $poolDecreaseError = Get-AnfRestErrorDetails -ErrorRecord $_
+                    $poolDecreaseMessage = "$($poolDecreaseError.Message)"
+                    if (
+                        $poolDecreaseError.Code -eq "PoolCustomThroughputCanNotBeDecreasedDuringCoolDownPeriod" -or
+                        $poolDecreaseError.Code -eq "ReceivedValueForAReadOnlyProperty" -or
+                        $poolDecreaseMessage -match "cool.?down" -or
+                        $poolDecreaseMessage -match "readonly property" -or
+                        $poolDecreaseMessage -match "Bad Request"
+                    ) {
+                        Write-Host "Pool decrease deferred: $($poolDecreaseError.Message)" -ForegroundColor Yellow
+                        Write-Output "Pool throughput decrease deferred for this run. ANF enforces a cooldown period (typically up to 24 hours) between throughput decreases; the script will attempt the decrease again automatically on the next scheduled run."
+                    } else {
+                        throw
+                    }
+                }
             }
         }
     } else {

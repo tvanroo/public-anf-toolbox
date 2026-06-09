@@ -175,14 +175,14 @@ $nonPerformantVolumes = $finalData | Where-Object { $_.Performant -eq "No" -and 
 $performantVolumes = $finalData | Where-Object { $_.Performant -eq "Yes" -and $_.ShortName -ne "unallocated" } | Measure-Object
 $totalVolumeQty = $anfVolumes.Count
 
-# For each volume calculate the amount of space it can give up, if any, and add it as a property called "SpaceToGiveUp"
+# For each volume calculate the amount of throughput it can give up, if any, and add it as a property called "ThroughputToGiveUpMibps"
 $finalData = $finalData | ForEach-Object {
     if ($_.ShortName -eq "unallocated") {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = $_.CurrentThroughputMibps
+        $_ | Add-Member -MemberType NoteProperty -Name ThroughputToGiveUpMibps -Value 0 -Force
+        $_.ThroughputToGiveUpMibps = $_.CurrentThroughputMibps
     } elseif ($_.Performant -eq "Yes" -and $_.CurrentThroughputMibps -gt 1) {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = [math]::Round(
+        $_ | Add-Member -MemberType NoteProperty -Name ThroughputToGiveUpMibps -Value 0 -Force
+        $_.ThroughputToGiveUpMibps = [math]::Round(
             [math]::Min(
                 ($_.CurrentThroughputMibps * $levelingAgressionPercent / 100),
                 ($_.CurrentThroughputMibps - $minimumThroughputPerVolume)
@@ -190,8 +190,8 @@ $finalData = $finalData | ForEach-Object {
             3
         )
     } elseif ($nonPerformantVolumes.Count -eq $totalVolumeQty) {
-        $_ | Add-Member -MemberType NoteProperty -Name SpaceToGiveUp -Value 0 -Force
-        $_.SpaceToGiveUp = [math]::Round(
+        $_ | Add-Member -MemberType NoteProperty -Name ThroughputToGiveUpMibps -Value 0 -Force
+        $_.ThroughputToGiveUpMibps = [math]::Round(
             [math]::Min(
                 ($_.CurrentThroughputMibps * $levelingAgressionPercent / 100),
                 ($_.CurrentThroughputMibps - $minimumThroughputPerVolume)
@@ -205,8 +205,8 @@ $finalData = $finalData | ForEach-Object {
 $totalVolumeQty = $anfVolumes.Count
 $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
 $totalminimumThroughputAllocated = [math]::Round($totalVolumeQty * $minimumThroughputPerVolume, 3)
-$totalAvailableSpaceToGiveUp = [math]::Round(($finalData | Measure-Object -Property SpaceToGiveUp -Sum).Sum, 3)
-$capacityPoolRemainingThroughputToAllocate = [math]::Round($capacityPoolMaxThroughput - $totalAvailableSpaceToGiveUp, 3)
+$totalAvailableThroughputToGiveUpMibps = [math]::Round(($finalData | Measure-Object -Property ThroughputToGiveUpMibps -Sum).Sum, 3)
+$capacityPoolRemainingThroughputToAllocate = [math]::Round($capacityPoolMaxThroughput - $totalAvailableThroughputToGiveUpMibps, 3)
 $totalThroughputLimitMetric = [math]::Round(($finalData | Measure-Object -Property ThroughputLimitMetric -Sum).Sum, 3)
 
 # Calculate the percentage of TotalThroughput for each volume and if total throughput limits reached is less than $throughputLimitMetricAllowance
@@ -227,10 +227,10 @@ $finalData | ForEach-Object {
         if ($_.Performant -eq "Yes" -and $_.CurrentThroughputMibps -lt 1) {
             $_.NewThroughputValue = 1
         } else {
-            $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.SpaceToGiveUp) + ($totalAvailableSpaceToGiveUp * $_.capacityPercentage / 100), 3)
+            $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.ThroughputToGiveUpMibps) + ($totalAvailableThroughputToGiveUpMibps * $_.capacityPercentage / 100), 3)
         }
     } elseif ($nonPerformantVolumes.Count -eq $totalVolumeQty) {
-        $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.SpaceToGiveUp) + ($totalAvailableSpaceToGiveUp * $_.capacityPercentage / 100), 3)
+        $_.NewThroughputValue = [math]::Round(($_.CurrentThroughputMibps - $_.ThroughputToGiveUpMibps) + ($totalAvailableThroughputToGiveUpMibps * $_.capacityPercentage / 100), 3)
     } else {
         $_.NewThroughputValue = 0
     }

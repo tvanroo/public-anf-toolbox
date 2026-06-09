@@ -18,9 +18,11 @@ By using any content from this repository, you acknowledge that you do so at you
 
 ## Deploy in Azure (FSL variant)
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F98c0847%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](https://aka.ms/deploytoazurebutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F98c0847%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov.json)
 
 Template file:
 - `ANF QoS Self Leveling/deploy/azuredeploy.json`
+- `ANF QoS Self Leveling/deploy/azuredeploy-gov.json` (Azure Government portal button target)
 - This button deploys automation for `ANF-QoS-Autoscale-SelfLeveling-FSL.ps1` (Flexible Service Level version).
 
 Post-deploy requirement:
