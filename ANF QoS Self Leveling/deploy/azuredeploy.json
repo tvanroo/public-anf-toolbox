@@ -9,13 +9,6 @@
         "description": "Location for the Automation Account."
       }
     },
-    "tenantId": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Optional tenant ID override. Leave empty to use Automation Account managed identity default context."
-      }
-    },
     "anfResourceGroupName": {
       "type": "string",
       "metadata": {
@@ -106,19 +99,6 @@
           "name": "Basic"
         },
         "publicNetworkAccess": true
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_TenantId')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Optional tenant override for Connect-AzAccount.",
-        "value": "[parameters('tenantId')]"
       }
     },
     {
