@@ -6,25 +6,25 @@
       "type": "string",
       "defaultValue": "eastus",
       "metadata": {
-        "description": "Location for the Automation Account."
+        "description": "Azure region where the Automation Account will be created (for example: eastus)."
       }
     },
     "anfResourceGroupName": {
       "type": "string",
       "metadata": {
-        "description": "Resource group containing the target Azure NetApp Files account/pool."
+        "description": "Name of the resource group that contains the Azure NetApp Files account and pool you want to automate."
       }
     },
     "anfAccountName": {
       "type": "string",
       "metadata": {
-        "description": "Target Azure NetApp Files account name."
+        "description": "Name of the Azure NetApp Files account to manage."
       }
     },
     "anfPoolName": {
       "type": "string",
       "metadata": {
-        "description": "Target Azure NetApp Files capacity pool name."
+        "description": "Name of the Azure NetApp Files capacity pool to rebalance."
       }
     },
     "testMode": {
@@ -35,7 +35,7 @@
         "No"
       ],
       "metadata": {
-        "description": "Yes = dry run, No = live changes."
+        "description": "Test mode. Yes = preview only (no changes in Azure). No = apply live throughput changes."
       }
     },
     "levelingAgressionPercent": {
@@ -44,7 +44,7 @@
       "minValue": 1,
       "maxValue": 100,
       "metadata": {
-        "description": "Max percent of reallocatable throughput shifted per run."
+        "description": "How aggressively to rebalance each run. This is the maximum percent of movable throughput shifted in one run. Lower = slower/safer, higher = faster/more change."
       }
     },
     "throughputLimitMetricAllowance": {
@@ -52,21 +52,21 @@
       "defaultValue": 6,
       "minValue": 0,
       "metadata": {
-        "description": "Threshold for considering a volume performant."
+        "description": "Allowed throughput-limit incidents per day before a volume is treated as constrained and prioritized for more throughput."
       }
     },
     "scheduleTimeZone": {
       "type": "string",
       "defaultValue": "UTC",
       "metadata": {
-        "description": "Time zone for the daily schedule."
+        "description": "Time zone used by the daily run schedule (for example: UTC)."
       }
     },
     "runbookScriptUri": {
       "type": "string",
       "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1",
       "metadata": {
-        "description": "URI of the runbook script content."
+        "description": "Source URL of the runbook script file to import and publish."
       }
     }
   },
