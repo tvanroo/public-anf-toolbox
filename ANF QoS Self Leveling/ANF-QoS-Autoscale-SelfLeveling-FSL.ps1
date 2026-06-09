@@ -72,6 +72,9 @@ function Normalize-SettingString {
 
     $normalized = "$Value"
     $normalized = $normalized.Trim()
+    if ($normalized.Contains('\\"')) {
+        $normalized = $normalized.Replace('\\"', '"')
+    }
     while (
         $normalized.Length -ge 2 -and
         (
