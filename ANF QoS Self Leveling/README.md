@@ -13,6 +13,8 @@ By using any content from this repository, you acknowledge that you do so at you
 # Download Script:
 [Self Leveling](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1)
     - Reallocates a defined percentage of throughput to volumes based on the historical frequency of Throughput Limit Reached metrics. Result: Volume performance is adjusted to minimize Throughput Limit Reached incidents.
+[Self Leveling - FSL](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1)
+    - Flexible Service Level variant with Manual QoS assumptions, guarded decreases, and safer defaults for recurring automation.
 
 ## GA Safety Notes
 
@@ -20,3 +22,141 @@ By using any content from this repository, you acknowledge that you do so at you
 - Live updates require `$testMode = "No"`.
 - Auto QoS to Manual conversion is previewed in test mode and only executed when both `$ConvertToManualMode = "Yes"` and `$testMode = "No"`.
 - Re-runs compare the current volume throughput values and only apply changes when the calculated target differs.
+
+## FSL variant behavior (ANF-QoS-Autoscale-SelfLeveling-FSL.ps1)
+
+- Expects a Manual QoS pool and exits if QoS is not Manual.
+- Enforces floor checks:
+  - Minimum pool throughput: `128 MiB/s`
+  - Minimum per-volume throughput: `1 MiB/s`
+- Uses `throughputLimitReached` history to rebalance throughput.
+- Allows increases immediately when metrics indicate pressure.
+- In live mode, increases pool throughput first (if needed), applies volume updates, then decreases pool throughput last (if needed).
+- Throughput-only behavior: no volume capacity resize and no pool size/capacity resize operations are performed.
+- Allows decreases only when:
+  - The last 3 rolling 24-hour windows are clean (aligned to script runtime), and
+  - Any decrease update gate is satisfied by retry logic.
+- For decrease updates that fail near timing boundaries, retries every 5 minutes for up to 1 hour before skipping that decrease.
+- Supports tag-based volume exclusion. Volumes tagged with `ExcludeFromAnfQosSelfLeveling=true` are ignored by automation and remain unchanged.
+
+## Quick safe start (recommended)
+
+1. Set `testMode = "Yes"` and run once.
+2. Review output table and verify proposed increases/decreases match expectations for your pool.
+3. Keep defaults for first live run (`levelingAgressionPercent=10`, `throughputLimitMetricAllowance=6`), then set `testMode = "No"`.
+4. Re-check next 1-2 runs and adjust aggressiveness only if needed.
+5. If a volume should be left untouched, add exclusion tag `ExcludeFromAnfQosSelfLeveling=true`.
+
+## Detailed script input guidance (FSL variant)
+
+### `tenantId`
+- What it is: Azure tenant used for authentication.
+- Default in script: placeholder.
+- Typical value: your Entra tenant GUID.
+- Impact: wrong value prevents authentication.
+
+### `resourceGroupName`
+- What it is: resource group containing the ANF account/pool.
+- Typical value: RG where target ANF resources live.
+- Impact: wrong value means no pool/volume discovery.
+
+### `anfAccountName`
+- What it is: ANF account to manage.
+- Typical value: one ANF account name.
+- Impact: defines account scope.
+
+### `anfPoolName`
+- What it is: specific pool to rebalance.
+- Typical value: one Manual QoS FSL pool.
+- Impact: defines pool scope.
+
+### `testMode` (default: `Yes`)
+- What it is: dry-run vs live mode.
+- `Yes`: shows proposed changes only.
+- `No`: applies updates with `Update-AzNetAppFilesVolume`.
+- Why default is `Yes`: safest first-run behavior for production pools.
+
+### `minimumThroughputPerVolume` (fixed minimum allowed: `1`)
+- What it is: per-volume floor.
+- Impact: prevents over-shrinking smaller or less active volumes.
+- Typical option: keep at `1` unless policy requires higher minimum guarantees.
+
+### `minimumPoolThroughputMibps` (default: `128`)
+- What it is: pool floor guard for FSL.
+- Impact: exits if pool throughput is below supported floor for this workflow.
+- Typical option: keep at `128`.
+
+### `throughputLookBackHours` (default: `24`)
+- What it is: metric window for primary rebalancing signal.
+- Lower values: more reactive, more movement run-to-run.
+- Higher values: smoother behavior, slower reaction.
+- Typical options: `24` (daily cadence), sometimes `12` for higher reactivity.
+
+### `levelingAgressionPercent` (default: `10`)
+- What it is: max share of allocatable throughput moved per run.
+- Lower values (5-10): conservative, stable, slower convergence.
+- Higher values (15-25): faster convergence, more churn.
+- Why default is `10`: balanced tradeoff for most steady-state production pools.
+
+### `throughputLimitMetricAllowance` (default: `6`)
+- What it is: acceptable threshold for considering a volume “performant”.
+- Lower values: stricter, more volumes treated as needing help.
+- Higher values: more permissive, fewer reallocations.
+- Why default is `6`: practical middle ground to reduce noisy reallocations.
+
+### `decreaseRetrySleepSeconds` (default: `300`)
+- What it is: retry interval for failed decrease updates.
+- Typical option: keep at 300 (5 min).
+- Impact: smaller value retries faster but increases API activity.
+
+### `decreaseRetryMaxWaitSeconds` (default: `3600`)
+- What it is: max cumulative wait for decrease retries in one run.
+- Typical option: 1800-3600.
+- Why default is `3600`: avoids losing a full day due to near-boundary timing while keeping run time bounded.
+
+### `excludeTagKey` (default: `ExcludeFromAnfQosSelfLeveling`)
+- What it is: tag key used to identify excluded volumes.
+- Typical option: keep default.
+- Impact: volumes matching key/value are not rebalanced.
+
+### `excludeTagValue` (default: `true`)
+- What it is: required tag value for exclusion (case-insensitive match).
+- Typical option: keep default and tag excluded volumes as `ExcludeFromAnfQosSelfLeveling=true`.
+- Impact: excluded volumes are ignored by automation and their allocated throughput is reserved out of the managed throughput budget.
+
+## Deploy-in-Azure input guidance (proposed)
+
+### Inputs to prompt for
+- `location`
+- `identityType` (recommended default: `SystemAssigned`)
+- `anfResourceGroupName`
+- `anfAccountName`
+- `anfPoolName`
+- `testMode` (recommended default: `Yes`)
+- `levelingAgressionPercent` (recommended default: `10`)
+- `throughputLimitMetricAllowance` (recommended default: `6`)
+- `scheduleTimeZone` (recommended default: `UTC`)
+
+### Inputs to auto-generate or fix
+- Automation account name: auto-generated
+- Runbook name: fixed
+- Schedule name: fixed
+- Frequency: every 24 hours
+- Start time: auto-generated
+- `throughputLookBackHours`: fixed to `24`
+- `minimumThroughputPerVolume`: fixed to `1`
+- `minimumPoolThroughputMibps`: fixed to `128`
+- No deploy-time exclusion list input is exposed. Use volume tags post-deployment (`ExcludeFromAnfQosSelfLeveling=true`) to exclude specific volumes.
+
+## Resource metadata/callback guidance for future admins
+
+Recommended tags on deployed resources:
+- `managed-by=public-anf-toolbox`
+- `solution=anf-qos-self-leveling-fsl`
+- `repository=https://github.com/tvanroo/public-anf-toolbox`
+- `documentation=https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Self%20Leveling`
+- `script=ANF-QoS-Autoscale-SelfLeveling-FSL.ps1`
+- `owner=<team-or-alias>`
+- `support=<email-or-channel>`
+
+Also populate a runbook description with purpose + documentation URL so operators can identify intent directly in Azure Automation.

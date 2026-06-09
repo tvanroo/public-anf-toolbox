@@ -173,6 +173,7 @@ $finalData = $finalData | ForEach-Object {
 # Set $allVolumesNonPerformant to true if all volumes except unallocated are non-performant
 $nonPerformantVolumes = $finalData | Where-Object { $_.Performant -eq "No" -and $_.ShortName -ne "unallocated" } | Measure-Object
 $performantVolumes = $finalData | Where-Object { $_.Performant -eq "Yes" -and $_.ShortName -ne "unallocated" } | Measure-Object
+$totalVolumeQty = $anfVolumes.Count
 
 # For each volume calculate the amount of space it can give up, if any, and add it as a property called "SpaceToGiveUp"
 $finalData = $finalData | ForEach-Object {
