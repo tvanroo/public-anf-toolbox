@@ -87,6 +87,23 @@ if ($testMode -eq "Yes") {
     exit
 }
 
+# Validate required ANF cmdlets are available
+$requiredAnfCmdlets = @(
+    "Get-AzNetAppFilesAccount",
+    "Get-AzNetAppFilesPool",
+    "Get-AzNetAppFilesVolume",
+    "Update-AzNetAppFilesVolume"
+)
+
+$missingAnfCmdlets = @($requiredAnfCmdlets | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+if ($missingAnfCmdlets.Count -gt 0) {
+    try { Import-Module Az.NetAppFiles -ErrorAction Stop } catch {}
+    $missingAnfCmdlets = @($requiredAnfCmdlets | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
+}
+if ($missingAnfCmdlets.Count -gt 0) {
+    throw "Required Az.NetAppFiles cmdlets are missing: $($missingAnfCmdlets -join ', '). Import/install Az.NetAppFiles in this Automation Account and re-run."
+}
+
 # Get the Azure NetApp Files account details
 $anfAccount = Get-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName
 # Get the Azure NetApp Files capacity pool details
