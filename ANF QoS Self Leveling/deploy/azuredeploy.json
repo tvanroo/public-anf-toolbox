@@ -110,7 +110,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Target ANF resource group.",
-        "value": "[parameters('anfResourceGroupName')]"
+        "value": "[concat('\"', parameters('anfResourceGroupName'), '\"')]"
       }
     },
     {
@@ -123,7 +123,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Target ANF account name.",
-        "value": "[parameters('anfAccountName')]"
+        "value": "[concat('\"', parameters('anfAccountName'), '\"')]"
       }
     },
     {
@@ -136,7 +136,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Target ANF pool name.",
-        "value": "[parameters('anfPoolName')]"
+        "value": "[concat('\"', parameters('anfPoolName'), '\"')]"
       }
     },
     {
@@ -149,7 +149,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Runbook mode (Yes=preview, No=live).",
-        "value": "[parameters('testMode')]"
+        "value": "[concat('\"', parameters('testMode'), '\"')]"
       }
     },
     {
