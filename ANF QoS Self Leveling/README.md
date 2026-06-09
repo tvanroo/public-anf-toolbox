@@ -17,7 +17,7 @@ By using any content from this repository, you acknowledge that you do so at you
     - Flexible Service Level variant with Manual QoS assumptions, guarded decreases, and safer defaults for recurring automation.
 
 ## Deploy in Azure (FSL variant)
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fb01ce8ca1aeef3b6315df75f7ac0b36f0284e23c%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F140094e3be0f4ab5df39072b71e63aa7d3707e82%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
 
 Template file:
 - `ANF QoS Self Leveling/deploy/azuredeploy.json`
