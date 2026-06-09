@@ -63,104 +63,69 @@ Post-deploy requirement:
 5. Tag each capacity pool you want automated with `AnfQosSelfLevelingTarget=true`.
 6. If a volume should be left untouched, add exclusion tag `ExcludeFromAnfQosSelfLeveling=true`.
 
-## Detailed script input guidance (FSL variant)
+## Deploy wizard inputs (what you set during Deploy to Azure)
 
-### `tenantId`
-- What it is: Azure tenant used for authentication.
-- Default in script: placeholder.
-- Typical value: your Entra tenant GUID.
-- Impact: wrong value prevents authentication.
+### `targetPoolIncludeTagKey` (default `AnfQosSelfLevelingTarget`)
+- Capacity-pool include tag key.
+- Only pools with this key/value pair are processed.
 
-### `subscriptionId`
-- What it is: subscription scope used for capacity pool discovery.
-- Typical value: set automatically by deploy template.
-- Impact: script discovers tagged pools in this subscription.
+### `targetPoolIncludeTagValue` (default `true`)
+- Capacity-pool include tag value (case-insensitive).
 
-### `targetPoolIncludeTagKey` (default: `AnfQosSelfLevelingTarget`)
-- What it is: capacity pool include tag key.
-- Impact: only pools with this key/value pair are targeted.
+### `testMode` (default `Yes`)
+- `Yes`: dry run only.
+- `No`: apply live throughput updates.
 
-### `targetPoolIncludeTagValue` (default: `true`)
-- What it is: include tag value (case-insensitive match).
-- Impact: controls which pools are in-scope for automation.
+### `levelingAgressionPercent` (default `10`)
+- Max share of movable throughput shifted each run.
+- Lower = slower/steadier; higher = faster/more churn.
 
-### `testMode` (default: `Yes`)
-- What it is: dry-run vs live mode.
-- `Yes`: shows proposed changes only.
-- `No`: applies updates via ARM REST calls.
-- Why default is `Yes`: safest first-run behavior for production pools.
+### `throughputLimitMetricAllowance` (default `6`)
+- Equilibrium threshold.
+- Above threshold: increase candidate.
+- At/below threshold: decrease candidate (subject to decrease clean-window gate).
 
-### `minimumThroughputPerVolume` (fixed minimum allowed: `1`)
-- What it is: per-volume floor.
-- Impact: prevents over-shrinking smaller or less active volumes.
-- Typical option: keep at `1` unless policy requires higher minimum guarantees.
+### `scheduleTimeZone` / `scheduleStartTimeUtc`
+- Controls schedule timing only.
 
-### `minimumPoolThroughputMibps` (default: `128`)
-- What it is: pool floor guard for FSL.
-- Impact: exits if pool throughput is below supported floor for this workflow.
-- Typical option: keep at `128`.
+## Automation Shared Variables (post-deploy tuning in portal)
 
-### `throughputLookBackHours` (default: `24`)
-- What it is: metric window for primary rebalancing signal.
-- Lower values: more reactive, more movement run-to-run.
-- Higher values: smoother behavior, slower reaction.
-- Typical options: `24` (daily cadence), sometimes `12` for higher reactivity.
+Edit these in **Automation Account → Shared Resources → Variables**.
 
-### `levelingAgressionPercent` (default: `10`)
-- What it is: max share of allocatable throughput moved per run.
-- Lower values (5-10): conservative, stable, slower convergence.
-- Higher values (15-25): faster convergence, more churn.
-- Why default is `10`: balanced tradeoff for most steady-state production pools.
+### Targeting and run mode
+- `ANF_SubscriptionId`: subscription scope for discovery.
+- `ANF_TargetPoolIncludeTagKey` / `ANF_TargetPoolIncludeTagValue`: pool targeting tags.
+- `ANF_TestMode`: `Yes` (preview) or `No` (live).
 
-### `throughputLimitMetricAllowance` (default: `6`)
-- What it is: acceptable threshold for considering a volume “performant”.
-- Lower values: stricter, more volumes treated as needing help.
-- Higher values: more permissive, fewer reallocations.
-- Why default is `6`: practical middle ground to reduce noisy reallocations.
+### Increase/decrease behavior
+- `ANF_IncreaseLookBackHours` (default `24`): increase-signal lookback window.
+- `ANF_DecreaseRequiredCleanDays` (default `3`): number of clean 24-hour windows required before decreases are allowed.
+- `ANF_ThroughputLimitMetricAllowance` (default `6`): over/under threshold target.
+- `ANF_LevelingAgressionPercent` (default `10`): per-run movement aggressiveness.
 
-### `decreaseRetrySleepSeconds` (default: `300`)
-- What it is: retry interval for failed decrease updates.
-- Typical option: keep at 300 (5 min).
-- Impact: smaller value retries faster but increases API activity.
+### Throughput safety floors
+- `ANF_MinimumThroughputPerVolume` (default `1`)
+- `ANF_MinimumPoolThroughputMibps` (default `128`)
 
-### `decreaseRetryMaxWaitSeconds` (default: `3600`)
-- What it is: max cumulative wait for decrease retries in one run.
-- Typical option: 1800-3600.
-- Why default is `3600`: avoids losing a full day due to near-boundary timing while keeping run time bounded.
+### Decrease retry behavior
+- `ANF_DecreaseRetrySleepSeconds` (default `300`)
+- `ANF_DecreaseRetryMaxWaitSeconds` (default `3600`)
 
-### `excludeTagKey` (default: `ExcludeFromAnfQosSelfLeveling`)
-- What it is: tag key used to identify excluded volumes.
-- Typical option: keep default.
-- Impact: volumes matching key/value are not rebalanced.
+### Exclusions
+- `ANF_ExcludeTagKey` (default `ExcludeFromAnfQosSelfLeveling`)
+- `ANF_ExcludeTagValue` (default `true`)
 
-### `excludeTagValue` (default: `true`)
-- What it is: required tag value for exclusion (case-insensitive match).
-- Typical option: keep default and tag excluded volumes as `ExcludeFromAnfQosSelfLeveling=true`.
-- Impact: excluded volumes are ignored by automation and their allocated throughput is reserved out of the managed throughput budget.
+### Optional auth overrides
+- `ANF_TenantId` (usually not needed when Managed Identity context is healthy)
 
-## Deploy-in-Azure input guidance (proposed)
+## Runtime decision flow (high level)
 
-### Inputs to prompt for
-- `targetPoolIncludeTagKey` (recommended default: `AnfQosSelfLevelingTarget`)
-- `targetPoolIncludeTagValue` (recommended default: `true`)
-- `testMode` (recommended default: `Yes`)
-- `levelingAgressionPercent` (recommended default: `10`)
-- `throughputLimitMetricAllowance` (recommended default: `6`)
-- `scheduleTimeZone` (recommended default: `UTC`)
-
-### Inputs to auto-generate or fix
-- Automation account name: auto-generated
-- Region/location: uses the deployment resource group's region (portal Region selector)
-- Managed identity type: fixed to SystemAssigned
-- Runbook name: fixed
-- Schedule name: fixed
-- Frequency: every 24 hours
-- Start time: auto-generated
-- SubscriptionId: auto-set to deployment subscription
-- `throughputLookBackHours`: fixed to `24`
-- `minimumThroughputPerVolume`: fixed to `1`
-- `minimumPoolThroughputMibps`: fixed to `128`
-- No deploy-time exclusion list input is exposed. Use volume tags post-deployment (`ExcludeFromAnfQosSelfLeveling=true`) to exclude specific volumes.
+1. Discover tagged pools.
+2. For each pool, evaluate volume metrics using `ANF_IncreaseLookBackHours`.
+3. If pressure exists, rebalance toward the allowance threshold.
+4. If no pressure exists, still evaluate eligible per-volume decreases.
+5. Apply decrease gate: only volumes clean for `ANF_DecreaseRequiredCleanDays` can decrease.
+6. Respect min floors and exclusion tags.
 
 ## Resource metadata/callback guidance for future admins
 
