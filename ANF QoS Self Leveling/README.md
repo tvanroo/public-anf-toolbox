@@ -16,6 +16,15 @@ By using any content from this repository, you acknowledge that you do so at you
 [Self Leveling - FSL](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1)
     - Flexible Service Level variant with Manual QoS assumptions, guarded decreases, and safer defaults for recurring automation.
 
+## Deploy in Azure
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
+
+Template file:
+- `ANF QoS Self Leveling/deploy/azuredeploy.json`
+
+Post-deploy requirement:
+- Grant the Automation Account managed identity access to your ANF target scope before running live mode (for example, Contributor on the target ANF resource group).
+
 ## GA Safety Notes
 
 - The script defaults to `$testMode = "Yes"`, so it reports planned throughput allocation without updating volumes.

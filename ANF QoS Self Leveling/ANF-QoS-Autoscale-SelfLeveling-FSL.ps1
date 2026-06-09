@@ -48,9 +48,33 @@ Use "Connect-AzAccount -Identity" instead of "Connect-AzAccount".
     $excludeTagKey = "ExcludeFromAnfQosSelfLeveling"        # Volumes with this tag key/value pair are excluded from automation
     $excludeTagValue = "true"                               # Tag value match is case-insensitive
 
+# Optional Azure Automation variable overrides (used by Deploy-in-Azure workflow)
+if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
+    try { $tenantId = (Get-AutomationVariable -Name "ANF_TenantId" -ErrorAction Stop) } catch {}
+    try { $resourceGroupName = (Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction Stop) } catch {}
+    try { $anfAccountName = (Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction Stop) } catch {}
+    try { $anfPoolName = (Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction Stop) } catch {}
+    try { $testMode = (Get-AutomationVariable -Name "ANF_TestMode" -ErrorAction Stop) } catch {}
+    try { $levelingAgressionPercent = [int](Get-AutomationVariable -Name "ANF_LevelingAgressionPercent" -ErrorAction Stop) } catch {}
+    try { $throughputLimitMetricAllowance = [double](Get-AutomationVariable -Name "ANF_ThroughputLimitMetricAllowance" -ErrorAction Stop) } catch {}
+}
+
 # Connect to Azure
 if (-not (Get-AzContext)) {
-    Connect-AzAccount -TenantId $tenantId
+    $isAutomationHost = [bool](Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue)
+    if ($isAutomationHost) {
+        try {
+            if ($tenantId -and $tenantId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+                Connect-AzAccount -Identity -TenantId $tenantId | Out-Null
+            } else {
+                Connect-AzAccount -Identity | Out-Null
+            }
+        } catch {
+            Connect-AzAccount -TenantId $tenantId | Out-Null
+        }
+    } else {
+        Connect-AzAccount -TenantId $tenantId | Out-Null
+    }
     Get-AzContext
 }
 
