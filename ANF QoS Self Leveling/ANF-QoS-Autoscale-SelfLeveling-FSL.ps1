@@ -64,6 +64,38 @@ if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
     try { $levelingAgressionPercent = [int](Get-AutomationVariable -Name "ANF_LevelingAgressionPercent" -ErrorAction Stop) } catch {}
     try { $throughputLimitMetricAllowance = [double](Get-AutomationVariable -Name "ANF_ThroughputLimitMetricAllowance" -ErrorAction Stop) } catch {}
 }
+function Normalize-SettingString {
+    param([object]$Value)
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    $normalized = "$Value"
+    $normalized = $normalized.Trim()
+    while (
+        $normalized.Length -ge 2 -and
+        (
+            ($normalized.StartsWith('"') -and $normalized.EndsWith('"')) -or
+            ($normalized.StartsWith("'") -and $normalized.EndsWith("'"))
+        )
+    ) {
+        $normalized = $normalized.Substring(1, $normalized.Length - 2).Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($normalized)) {
+        return $null
+    }
+
+    return $normalized
+}
+$tenantId = Normalize-SettingString $tenantId
+$subscriptionId = Normalize-SettingString $subscriptionId
+$resourceGroupName = Normalize-SettingString $resourceGroupName
+$anfAccountName = Normalize-SettingString $anfAccountName
+$anfPoolName = Normalize-SettingString $anfPoolName
+$targetPoolIncludeTagKey = Normalize-SettingString $targetPoolIncludeTagKey
+$targetPoolIncludeTagValue = Normalize-SettingString $targetPoolIncludeTagValue
+$testMode = Normalize-SettingString $testMode
 
 # Connect to Azure
 if (-not (Get-AzContext)) {
@@ -91,8 +123,29 @@ if (-not (Get-AzContext)) {
     }
     Get-AzContext
 }
+$availableSubscriptions = @()
+try {
+    $availableSubscriptions = @(Get-AzSubscription -ErrorAction SilentlyContinue)
+} catch {}
+
 if ($subscriptionId) {
-    Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop | Out-Null
+    try {
+        Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop | Out-Null
+    } catch {
+        if ($availableSubscriptions.Count -eq 1) {
+            Set-AzContext -SubscriptionId $availableSubscriptions[0].Id -ErrorAction Stop | Out-Null
+            Write-Host "Requested subscription '$subscriptionId' could not be selected; using the only discoverable subscription '$($availableSubscriptions[0].Id)'." -ForegroundColor Yellow
+        } else {
+            throw "Unable to set Azure context to subscription '$subscriptionId'. Ensure ANF_SubscriptionId is valid and this managed identity has access to that subscription."
+        }
+    }
+} elseif ($availableSubscriptions.Count -eq 1) {
+    Set-AzContext -SubscriptionId $availableSubscriptions[0].Id -ErrorAction Stop | Out-Null
+}
+
+$currentAzContext = Get-AzContext -ErrorAction SilentlyContinue
+if (-not $currentAzContext -or -not $currentAzContext.Subscription -or [string]::IsNullOrWhiteSpace($currentAzContext.Subscription.Id)) {
+    throw "No active Azure subscription context is available. Grant this managed identity access to the target subscription and set ANF_SubscriptionId."
 }
 
 if ($testMode -eq "Yes") {
