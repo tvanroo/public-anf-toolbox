@@ -106,7 +106,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Target subscription for ANF discovery.",
-        "value": "[concat('\\\"', subscription().subscriptionId, '\\\"')]"
+        "value": "[concat('\"', subscription().subscriptionId, '\"')]"
       }
     },
     {
@@ -119,7 +119,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Capacity pool include tag key.",
-        "value": "[concat('\\\"', parameters('targetPoolIncludeTagKey'), '\\\"')]"
+        "value": "[concat('\"', parameters('targetPoolIncludeTagKey'), '\"')]"
       }
     },
     {
@@ -132,7 +132,7 @@
       "properties": {
         "isEncrypted": false,
         "description": "Capacity pool include tag value.",
-        "value": "[concat('\\\"', parameters('targetPoolIncludeTagValue'), '\\\"')]"
+        "value": "[concat('\"', parameters('targetPoolIncludeTagValue'), '\"')]"
       }
     },
     {
@@ -253,7 +253,7 @@
     },
     "rbacNextStep": {
       "type": "string",
-      "value": "Grant the Automation Account managed identity access to the target ANF scope before running live mode (for example, Contributor on the ANF resource group)."
+      "value": "Grant the Automation Account managed identity access before live mode (for example, Reader at subscription for pool discovery and Contributor on tagged ANF resource groups for updates)."
     }
   }
 }
