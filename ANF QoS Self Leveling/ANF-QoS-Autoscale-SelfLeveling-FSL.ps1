@@ -32,24 +32,24 @@ Use "Connect-AzAccount -Identity" instead of "Connect-AzAccount".
 # Install-Module -Name Az -Force -AllowClobber
 # Install-Module -Name Az.NetAppFiles -Force -AllowClobber
 
-# User Editable Variables:
-    $tenantId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"      # Tenant ID for the Azure subscription
-    $subscriptionId = ""                                    # Optional subscription ID override (recommended for Automation)
-    $resourceGroupName = "example-rg"                       # Optional fallback single-target resource group name
-    $anfAccountName = "example-anf-acct"                    # Optional fallback single-target ANF account name
-    $anfPoolName = "example-anf-pool"                       # Optional fallback single-target ANF pool name
-    $targetPoolIncludeTagKey = "AnfQosSelfLevelingTarget"   # Capacity pools with this tag key/value are targeted
-    $targetPoolIncludeTagValue = "true"                     # Tag value match is case-insensitive
-    $testMode = "Yes"                                       # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes and displays report
-    $minimumThroughputPerVolume = 1                         # Minimum throughput per volume in MiB/s (minimum allowed is 1)
-    $minimumPoolThroughputMibps = 128                       # Minimum flexible service level pool throughput in MiB/s
-    $throughputLookBackHours = 24                           # Look-back period in hours for throughput metrics
-    $levelingAgressionPercent = 10                          # Leveling Aggression Factor: How much throughput is re-allocated per run?
-    $throughputLimitMetricAllowance = 6                     # What ThroughputLimitMetric value is considered acceptable for a volume to be considered performant
-    $decreaseRetrySleepSeconds = 300                        # If a decrease update fails, retry at this interval (5 minutes)
-    $decreaseRetryMaxWaitSeconds = 3600                     # Maximum cumulative wait to keep retrying decreases (1 hour)
-    $excludeTagKey = "ExcludeFromAnfQosSelfLeveling"        # Volumes with this tag key/value pair are excluded from automation
-    $excludeTagValue = "true"                               # Tag value match is case-insensitive
+# User Editable Variables (environment-first):
+    $tenantId = $env:ANF_TenantId                           # Tenant ID for Azure authentication (optional)
+    $subscriptionId = $env:ANF_SubscriptionId               # Optional subscription ID override (recommended for Automation)
+    $resourceGroupName = $env:ANF_ResourceGroupName         # Optional fallback single-target resource group name
+    $anfAccountName = $env:ANF_AccountName                  # Optional fallback single-target ANF account name
+    $anfPoolName = $env:ANF_PoolName                        # Optional fallback single-target ANF pool name
+    $targetPoolIncludeTagKey = if ($env:ANF_TargetPoolIncludeTagKey) { $env:ANF_TargetPoolIncludeTagKey } else { "AnfQosSelfLevelingTarget" }  # Capacity pools with this tag key/value are targeted
+    $targetPoolIncludeTagValue = if ($env:ANF_TargetPoolIncludeTagValue) { $env:ANF_TargetPoolIncludeTagValue } else { "true" }                 # Tag value match is case-insensitive
+    $testMode = if ($env:ANF_TestMode) { $env:ANF_TestMode } else { "Yes" }                                                                  # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes and displays report
+    $minimumThroughputPerVolume = if ($env:ANF_MinimumThroughputPerVolume) { [int]$env:ANF_MinimumThroughputPerVolume } else { 1 }            # Minimum throughput per volume in MiB/s (minimum allowed is 1)
+    $minimumPoolThroughputMibps = if ($env:ANF_MinimumPoolThroughputMibps) { [int]$env:ANF_MinimumPoolThroughputMibps } else { 128 }          # Minimum flexible service level pool throughput in MiB/s
+    $throughputLookBackHours = if ($env:ANF_ThroughputLookBackHours) { [int]$env:ANF_ThroughputLookBackHours } else { 24 }                    # Look-back period in hours for throughput metrics
+    $levelingAgressionPercent = if ($env:ANF_LevelingAgressionPercent) { [int]$env:ANF_LevelingAgressionPercent } else { 10 }                 # Leveling Aggression Factor: How much throughput is re-allocated per run?
+    $throughputLimitMetricAllowance = if ($env:ANF_ThroughputLimitMetricAllowance) { [double]$env:ANF_ThroughputLimitMetricAllowance } else { 6 }  # What ThroughputLimitMetric value is considered acceptable for a volume to be considered performant
+    $decreaseRetrySleepSeconds = if ($env:ANF_DecreaseRetrySleepSeconds) { [int]$env:ANF_DecreaseRetrySleepSeconds } else { 300 }              # If a decrease update fails, retry at this interval (5 minutes)
+    $decreaseRetryMaxWaitSeconds = if ($env:ANF_DecreaseRetryMaxWaitSeconds) { [int]$env:ANF_DecreaseRetryMaxWaitSeconds } else { 3600 }      # Maximum cumulative wait to keep retrying decreases (1 hour)
+    $excludeTagKey = if ($env:ANF_ExcludeTagKey) { $env:ANF_ExcludeTagKey } else { "ExcludeFromAnfQosSelfLeveling" }                          # Volumes with this tag key/value pair are excluded from automation
+    $excludeTagValue = if ($env:ANF_ExcludeTagValue) { $env:ANF_ExcludeTagValue } else { "true" }                                             # Tag value match is case-insensitive
 
 # Optional Azure Automation variable overrides (used by Deploy-in-Azure workflow)
 if (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue) {
@@ -70,16 +70,24 @@ if (-not (Get-AzContext)) {
     $isAutomationHost = [bool](Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue)
     if ($isAutomationHost) {
         try {
-            if ($tenantId -and $tenantId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+            if ($tenantId) {
                 Connect-AzAccount -Identity -TenantId $tenantId | Out-Null
             } else {
                 Connect-AzAccount -Identity | Out-Null
             }
         } catch {
-            Connect-AzAccount -TenantId $tenantId | Out-Null
+            if ($tenantId) {
+                Connect-AzAccount -TenantId $tenantId | Out-Null
+            } else {
+                Connect-AzAccount | Out-Null
+            }
         }
     } else {
-        Connect-AzAccount -TenantId $tenantId | Out-Null
+        if ($tenantId) {
+            Connect-AzAccount -TenantId $tenantId | Out-Null
+        } else {
+            Connect-AzAccount | Out-Null
+        }
     }
     Get-AzContext
 }
@@ -547,9 +555,9 @@ foreach ($candidatePool in $candidatePools) {
 }
 
 if ($targetPools.Count -eq 0 -and
-    $resourceGroupName -and $resourceGroupName -ne "example-rg" -and
-    $anfAccountName -and $anfAccountName -ne "example-anf-acct" -and
-    $anfPoolName -and $anfPoolName -ne "example-anf-pool") {
+    $resourceGroupName -and
+    $anfAccountName -and
+    $anfPoolName) {
     Write-Host "No tagged pools found. Falling back to configured single target: $resourceGroupName / $anfAccountName / $anfPoolName" -ForegroundColor Yellow
     $targetPools += [PSCustomObject]@{
         ResourceGroupName = $resourceGroupName
