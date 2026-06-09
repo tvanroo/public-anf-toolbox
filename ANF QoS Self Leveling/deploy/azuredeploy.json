@@ -189,6 +189,20 @@
       }
     },
     {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, variables('automationAccountName'), 'subscription-contributor')]",
+      "scope": "[subscription().id]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
       "type": "Microsoft.Automation/automationAccounts/runbooks",
       "apiVersion": "2023-11-01",
       "name": "[concat(variables('automationAccountName'), '/', variables('runbookName'))]",
@@ -253,7 +267,7 @@
     },
     "rbacNextStep": {
       "type": "string",
-      "value": "Grant the Automation Account managed identity access before live mode (for example, Reader at subscription for pool discovery and Contributor on tagged ANF resource groups for updates)."
+      "value": "Deployment attempts to grant the Automation Account managed identity Contributor at subscription scope. If deployment lacks IAM grant rights, assign Contributor at subscription scope manually."
     }
   }
 }

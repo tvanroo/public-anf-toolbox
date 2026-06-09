@@ -24,7 +24,8 @@ Template file:
 - This button deploys automation for `ANF-QoS-Autoscale-SelfLeveling-FSL.ps1` (Flexible Service Level version).
 
 Post-deploy requirement:
-- Grant the Automation Account managed identity access to your ANF target scope before running live mode (for example, Reader at subscription for discovery + Contributor on tagged ANF resource groups for updates).
+- Deployment now attempts to grant the Automation Account managed identity Contributor at subscription scope automatically.
+- If deployment IAM rights are insufficient for role assignment, grant Contributor at subscription scope manually before running live mode.
 - In the Automation Account, confirm module `Az.NetAppFiles` import reaches `Available` before first Test Pane run (initial import can take several minutes).
 
 ## GA Safety Notes
