@@ -26,7 +26,8 @@ Template file:
 Post-deploy requirement:
 - Deployment now attempts to grant the Automation Account managed identity Contributor at subscription scope automatically.
 - If deployment IAM rights are insufficient for role assignment, grant Contributor at subscription scope manually before running live mode.
-- In the Automation Account, confirm module `Az.NetAppFiles` import reaches `Available` before first Test Pane run (initial import can take several minutes).
+- Deployment pins fixed (non-auto-updating) module versions for `Az.Accounts`, `Az.Resources`, and `Az.Monitor`.
+- In the Automation Account, confirm those pinned module imports reach `Available` before first Test Pane run (initial import can take several minutes).
 
 ## GA Safety Notes
 
@@ -86,7 +87,7 @@ Post-deploy requirement:
 ### `testMode` (default: `Yes`)
 - What it is: dry-run vs live mode.
 - `Yes`: shows proposed changes only.
-- `No`: applies updates with `Update-AzNetAppFilesVolume`.
+- `No`: applies updates via ARM REST calls.
 - Why default is `Yes`: safest first-run behavior for production pools.
 
 ### `minimumThroughputPerVolume` (fixed minimum allowed: `1`)

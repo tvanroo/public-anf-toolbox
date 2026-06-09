@@ -64,6 +64,27 @@
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
+    },
+    "azAccountsModuleVersion": {
+      "type": "string",
+      "defaultValue": "5.5.0",
+      "metadata": {
+        "description": "Pinned Az.Accounts module version for Automation Account."
+      }
+    },
+    "azResourcesModuleVersion": {
+      "type": "string",
+      "defaultValue": "10.0.0",
+      "metadata": {
+        "description": "Pinned Az.Resources module version for Automation Account."
+      }
+    },
+    "azMonitorModuleVersion": {
+      "type": "string",
+      "defaultValue": "8.0.0",
+      "metadata": {
+        "description": "Pinned Az.Monitor module version for Automation Account."
+      }
     }
   },
   "variables": {
@@ -175,16 +196,148 @@
       }
     },
     {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_IncreaseLookBackHours')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Increase signal look-back period in hours for throughputLimitReached metrics.",
+        "value": "24"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRequiredCleanDays')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Required number of clean 24-hour windows before throughput decreases are allowed.",
+        "value": "3"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumThroughputPerVolume')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum throughput floor per managed volume (MiB/s).",
+        "value": "1"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumPoolThroughputMibps')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum flexible service level pool throughput floor (MiB/s).",
+        "value": "128"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRetrySleepSeconds')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Retry interval in seconds for blocked decrease updates.",
+        "value": "300"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRetryMaxWaitSeconds')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Maximum cumulative retry wait in seconds for decrease updates.",
+        "value": "3600"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ExcludeTagKey')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Volume tag key used to exclude volumes from self-leveling.",
+        "value": "\"ExcludeFromAnfQosSelfLeveling\""
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ExcludeTagValue')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Volume tag value used with ANF_ExcludeTagKey to exclude volumes.",
+        "value": "\"true\""
+      }
+    },
+    {
       "type": "Microsoft.Automation/automationAccounts/modules",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/Az.NetAppFiles')]",
+      "name": "[concat(variables('automationAccountName'), '/Az.Accounts')]",
       "location": "[resourceGroup().location]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
         "contentLink": {
-          "uri": "https://www.powershellgallery.com/api/v2/package/Az.NetAppFiles"
+          "uri": "[concat('https://www.powershellgallery.com/api/v2/package/Az.Accounts/', parameters('azAccountsModuleVersion'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.Resources')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Accounts')]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "[concat('https://www.powershellgallery.com/api/v2/package/Az.Resources/', parameters('azResourcesModuleVersion'))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.Monitor')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Resources')]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "[concat('https://www.powershellgallery.com/api/v2/package/Az.Monitor/', parameters('azMonitorModuleVersion'))]"
         }
       }
     },
@@ -243,7 +396,7 @@
       "location": "[resourceGroup().location]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]",
-        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.NetAppFiles')]"
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Monitor')]"
       ],
       "tags": "[variables('standardTags')]",
       "properties": {
