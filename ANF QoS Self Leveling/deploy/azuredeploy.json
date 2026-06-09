@@ -64,7 +64,7 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1?v=20260609b",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/b01ce8ca1aeef3b6315df75f7ac0b36f0284e23c/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
