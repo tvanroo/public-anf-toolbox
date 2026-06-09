@@ -26,8 +26,8 @@ Template file:
 Post-deploy requirement:
 - Deployment now attempts to grant the Automation Account managed identity Contributor at subscription scope automatically.
 - If deployment IAM rights are insufficient for role assignment, grant Contributor at subscription scope manually before running live mode.
-- Deployment pins fixed (non-auto-updating) module versions for `Az.Accounts`, `Az.Resources`, and `Az.Monitor`.
-- In the Automation Account, confirm those pinned module imports reach `Available` before first Test Pane run (initial import can take several minutes).
+- Deployment uses Azure Automation runtime Az modules (no explicit PSG module pinning/import in the template).
+- If you manually import custom Az modules, validate compatibility in a test Automation Account first.
 
 ## GA Safety Notes
 
