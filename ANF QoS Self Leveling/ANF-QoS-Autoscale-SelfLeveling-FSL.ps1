@@ -177,8 +177,112 @@ if ($missingAnfCmdlets.Count -gt 0) {
     }
     $missingAnfCmdlets = @($requiredAnfCmdlets | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
 }
-if ($missingAnfCmdlets.Count -gt 0) {
-    throw "Required Az.NetAppFiles cmdlets are unavailable: $($missingAnfCmdlets -join ', '). Ensure Az.NetAppFiles module import has completed successfully in this Automation Account, then re-run."
+$useAzNetAppFilesCmdlets = ($missingAnfCmdlets.Count -eq 0)
+if (-not $useAzNetAppFilesCmdlets) {
+    Write-Host "Az.NetAppFiles cmdlets unavailable ($($missingAnfCmdlets -join ', ')). Falling back to ARM REST for ANF operations." -ForegroundColor Yellow
+}
+
+function Get-AnfPool {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    if ($useAzNetAppFilesCmdlets) {
+        return Get-AzNetAppFilesPool -ResourceGroupName $ResourceGroupName -AccountName $AccountName -Name $PoolName
+    }
+
+    $context = Get-AzContext -ErrorAction Stop
+    $apiVersion = "2024-07-01-preview"
+    $path = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName?api-version=$apiVersion"
+    $response = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
+    $pool = $response.Content | ConvertFrom-Json
+
+    return [PSCustomObject]@{
+        Id = $pool.id
+        Name = $pool.name
+        QosType = $pool.properties.qosType
+        TotalThroughputMibps = [double]$pool.properties.totalThroughputMibps
+    }
+}
+
+function Get-AnfVolumes {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    if ($useAzNetAppFilesCmdlets) {
+        return Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName
+    }
+
+    $context = Get-AzContext -ErrorAction Stop
+    $apiVersion = "2024-07-01-preview"
+    $path = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes?api-version=$apiVersion"
+    $response = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
+    $volumes = ($response.Content | ConvertFrom-Json).value
+    if (-not $volumes) {
+        return @()
+    }
+
+    return @($volumes | ForEach-Object {
+        [PSCustomObject]@{
+            Id = $_.id
+            Name = $_.name
+            Tags = $_.tags
+            ActualThroughputMibps = [double]$_.properties.actualThroughputMibps
+        }
+    })
+}
+
+function Get-AnfVolume {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][string]$VolumeName
+    )
+
+    if ($useAzNetAppFilesCmdlets) {
+        return Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -Name $VolumeName
+    }
+
+    $context = Get-AzContext -ErrorAction Stop
+    $apiVersion = "2024-07-01-preview"
+    $path = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes/$VolumeName?api-version=$apiVersion"
+    $response = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction Stop
+    $volume = $response.Content | ConvertFrom-Json
+
+    return [PSCustomObject]@{
+        Id = $volume.id
+        Name = $volume.name
+        Tags = $volume.tags
+        ActualThroughputMibps = [double]$volume.properties.actualThroughputMibps
+    }
+}
+
+function Set-AnfVolumeThroughput {
+    param(
+        [Parameter(Mandatory=$true)][object]$VolumeObject,
+        [Parameter(Mandatory=$true)][double]$TargetThroughputMibps
+    )
+
+    if ($useAzNetAppFilesCmdlets) {
+        $VolumeObject | Update-AzNetAppFilesVolume -ThroughputMibps $TargetThroughputMibps -ErrorAction Stop > $null
+        return
+    }
+
+    $apiVersion = "2024-07-01-preview"
+    $path = "$($VolumeObject.Id)?api-version=$apiVersion"
+    $payload = @{
+        properties = @{
+            throughputMibps = [math]::Round($TargetThroughputMibps, 3)
+        }
+    } | ConvertTo-Json -Depth 4
+
+    $null = Invoke-AzRestMethod -Method PATCH -Path $path -Payload $payload -ErrorAction Stop
 }
 function Invoke-FslSelfLevelingForPool {
     param(
@@ -188,10 +292,8 @@ function Invoke-FslSelfLevelingForPool {
     )
 
 Write-Host "Processing target pool: RG=$TargetResourceGroupName, Account=$TargetAnfAccountName, Pool=$TargetAnfPoolName" -ForegroundColor Cyan
-# Get the Azure NetApp Files account details
-$anfAccount = Get-AzNetAppFilesAccount -ResourceGroupName $TargetResourceGroupName -Name $TargetAnfAccountName
 # Get the Azure NetApp Files capacity pool details
-$anfPool = Get-AzNetAppFilesPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -Name $TargetAnfPoolName
+$anfPool = Get-AnfPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
 # Get Capacity Pool QoS Type
 $capacityPoolQosType = $anfPool.QosType
 # Get the maximum provisioned throughput of the capacity pool in MiB/s
@@ -260,7 +362,7 @@ if ($capacityPoolMaxThroughput -lt $minimumPoolThroughputMibps) {
 }
 
 # Get list of Volumes within Capacity Pool
-$anfVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
+$anfVolumes = Get-AnfVolumes -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
 
 # Collect Info for Each Volume and calculate values
 # If there are no volumes, write host message and exit
@@ -532,7 +634,7 @@ if ((($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure
         if ($poolIncreaseNeeded) {
             Write-Host "Increasing pool throughput before volume updates: $capacityPoolMaxThroughput -> $plannedPoolTargetThroughputMibps MiB/s" -ForegroundColor Yellow
             Update-FslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $plannedPoolTargetThroughputMibps
-            $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
+            $anfPool = Get-AnfPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
             $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
         }
 
@@ -543,16 +645,16 @@ if ((($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure
         $orderedUpdates | ForEach-Object {
             if ($_.ShortName -ne "unallocated") {
                 Write-Host "Updating volume `"$($_.ShortName)`" with new throughput value of `"$($_.NewThroughputValue)`" MiB/s" -ForegroundColor Yellow
-                $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName -Name $_.ShortName
+                $anfVolume = Get-AnfVolume -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName -VolumeName $_.ShortName
                 $isDecrease = $_.NewThroughputValue -lt $_.CurrentThroughputMibps
                 if (-not $isDecrease) {
-                    $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $_.NewThroughputValue -ErrorAction Stop > $null
+                    Set-AnfVolumeThroughput -VolumeObject $anfVolume -TargetThroughputMibps $_.NewThroughputValue
                 } else {
                     $retryElapsedSeconds = 0
                     $decreaseUpdateSucceeded = $false
                     while (-not $decreaseUpdateSucceeded) {
                         try {
-                            $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $_.NewThroughputValue -ErrorAction Stop > $null
+                            Set-AnfVolumeThroughput -VolumeObject $anfVolume -TargetThroughputMibps $_.NewThroughputValue
                             $decreaseUpdateSucceeded = $true
                         } catch {
                             if ($retryElapsedSeconds -ge $decreaseRetryMaxWaitSeconds) {
@@ -563,7 +665,7 @@ if ((($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure
                             Write-Host "Decrease update blocked for volume `"$($_.ShortName)`". Retrying in $decreaseRetrySleepSeconds seconds (elapsed: $retryElapsedSeconds sec)." -ForegroundColor Yellow
                             Start-Sleep -Seconds $decreaseRetrySleepSeconds
                             $retryElapsedSeconds += $decreaseRetrySleepSeconds
-                            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName -Name $_.ShortName
+                            $anfVolume = Get-AnfVolume -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName -VolumeName $_.ShortName
                         }
                     }
                 }
@@ -576,7 +678,7 @@ if ((($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure
             } else {
                 Write-Host "Decreasing pool throughput after volume updates: $capacityPoolMaxThroughput -> $plannedPoolTargetThroughputMibps MiB/s" -ForegroundColor Yellow
                 Update-FslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $plannedPoolTargetThroughputMibps
-                $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -Name $TargetAnfPoolName
+                $anfPool = Get-AnfPool -ResourceGroupName $TargetResourceGroupName -AccountName $TargetAnfAccountName -PoolName $TargetAnfPoolName
                 $capacityPoolMaxThroughput = $anfPool.TotalThroughputMibps
             }
         }
