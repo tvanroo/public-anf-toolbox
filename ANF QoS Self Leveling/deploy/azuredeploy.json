@@ -2,22 +2,18 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "anfResourceGroupName": {
+    "targetPoolIncludeTagKey": {
       "type": "string",
+      "defaultValue": "AnfQosSelfLevelingTarget",
       "metadata": {
-        "description": "Name of the resource group that contains the Azure NetApp Files account and pool you want to automate."
+        "description": "Tag key used on capacity pools to include them in automation."
       }
     },
-    "anfAccountName": {
+    "targetPoolIncludeTagValue": {
       "type": "string",
+      "defaultValue": "true",
       "metadata": {
-        "description": "Name of the Azure NetApp Files account to manage."
-      }
-    },
-    "anfPoolName": {
-      "type": "string",
-      "metadata": {
-        "description": "Name of the Azure NetApp Files capacity pool to rebalance."
+        "description": "Tag value used with targetPoolIncludeTagKey to include capacity pools in automation."
       }
     },
     "testMode": {
@@ -103,40 +99,40 @@
     {
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_ResourceGroupName')]",
+      "name": "[concat(variables('automationAccountName'), '/ANF_SubscriptionId')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
         "isEncrypted": false,
-        "description": "Target ANF resource group.",
-        "value": "[concat('\"', parameters('anfResourceGroupName'), '\"')]"
+        "description": "Target subscription for ANF discovery.",
+        "value": "[concat('\\\"', subscription().subscriptionId, '\\\"')]"
       }
     },
     {
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_AccountName')]",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TargetPoolIncludeTagKey')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
         "isEncrypted": false,
-        "description": "Target ANF account name.",
-        "value": "[concat('\"', parameters('anfAccountName'), '\"')]"
+        "description": "Capacity pool include tag key.",
+        "value": "[concat('\\\"', parameters('targetPoolIncludeTagKey'), '\\\"')]"
       }
     },
     {
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_PoolName')]",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TargetPoolIncludeTagValue')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
         "isEncrypted": false,
-        "description": "Target ANF pool name.",
-        "value": "[concat('\"', parameters('anfPoolName'), '\"')]"
+        "description": "Capacity pool include tag value.",
+        "value": "[concat('\\\"', parameters('targetPoolIncludeTagValue'), '\\\"')]"
       }
     },
     {

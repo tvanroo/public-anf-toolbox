@@ -24,7 +24,8 @@ Template file:
 - This button deploys automation for `ANF-QoS-Autoscale-SelfLeveling-FSL.ps1` (Flexible Service Level version).
 
 Post-deploy requirement:
-- Grant the Automation Account managed identity access to your ANF target scope before running live mode (for example, Contributor on the target ANF resource group).
+- Grant the Automation Account managed identity access to your ANF target scope before running live mode (for example, Reader at subscription for discovery + Contributor on tagged ANF resource groups for updates).
+- In the Automation Account, confirm module `Az.NetAppFiles` import reaches `Available` before first Test Pane run (initial import can take several minutes).
 
 ## GA Safety Notes
 
@@ -43,6 +44,8 @@ Post-deploy requirement:
 - Allows increases immediately when metrics indicate pressure.
 - In live mode, increases pool throughput first (if needed), applies volume updates, then decreases pool throughput last (if needed).
 - Throughput-only behavior: no volume capacity resize and no pool size/capacity resize operations are performed.
+- Supports tag-based pool targeting across multiple ANF accounts/pools in the subscription.
+  - Default include tag: `AnfQosSelfLevelingTarget=true`
 - Allows decreases only when:
   - The last 3 rolling 24-hour windows are clean (aligned to script runtime), and
   - Any decrease update gate is satisfied by retry logic.
@@ -55,7 +58,8 @@ Post-deploy requirement:
 2. Review output table and verify proposed increases/decreases match expectations for your pool.
 3. Keep defaults for first live run (`levelingAgressionPercent=10`, `throughputLimitMetricAllowance=6`), then set `testMode = "No"`.
 4. Re-check next 1-2 runs and adjust aggressiveness only if needed.
-5. If a volume should be left untouched, add exclusion tag `ExcludeFromAnfQosSelfLeveling=true`.
+5. Tag each capacity pool you want automated with `AnfQosSelfLevelingTarget=true`.
+6. If a volume should be left untouched, add exclusion tag `ExcludeFromAnfQosSelfLeveling=true`.
 
 ## Detailed script input guidance (FSL variant)
 
@@ -65,20 +69,18 @@ Post-deploy requirement:
 - Typical value: your Entra tenant GUID.
 - Impact: wrong value prevents authentication.
 
-### `resourceGroupName`
-- What it is: resource group containing the ANF account/pool.
-- Typical value: RG where target ANF resources live.
-- Impact: wrong value means no pool/volume discovery.
+### `subscriptionId`
+- What it is: subscription scope used for capacity pool discovery.
+- Typical value: set automatically by deploy template.
+- Impact: script discovers tagged pools in this subscription.
 
-### `anfAccountName`
-- What it is: ANF account to manage.
-- Typical value: one ANF account name.
-- Impact: defines account scope.
+### `targetPoolIncludeTagKey` (default: `AnfQosSelfLevelingTarget`)
+- What it is: capacity pool include tag key.
+- Impact: only pools with this key/value pair are targeted.
 
-### `anfPoolName`
-- What it is: specific pool to rebalance.
-- Typical value: one Manual QoS FSL pool.
-- Impact: defines pool scope.
+### `targetPoolIncludeTagValue` (default: `true`)
+- What it is: include tag value (case-insensitive match).
+- Impact: controls which pools are in-scope for automation.
 
 ### `testMode` (default: `Yes`)
 - What it is: dry-run vs live mode.
@@ -137,9 +139,8 @@ Post-deploy requirement:
 ## Deploy-in-Azure input guidance (proposed)
 
 ### Inputs to prompt for
-- `anfResourceGroupName`
-- `anfAccountName`
-- `anfPoolName`
+- `targetPoolIncludeTagKey` (recommended default: `AnfQosSelfLevelingTarget`)
+- `targetPoolIncludeTagValue` (recommended default: `true`)
 - `testMode` (recommended default: `Yes`)
 - `levelingAgressionPercent` (recommended default: `10`)
 - `throughputLimitMetricAllowance` (recommended default: `6`)
@@ -153,6 +154,7 @@ Post-deploy requirement:
 - Schedule name: fixed
 - Frequency: every 24 hours
 - Start time: auto-generated
+- SubscriptionId: auto-set to deployment subscription
 - `throughputLookBackHours`: fixed to `24`
 - `minimumThroughputPerVolume`: fixed to `1`
 - `minimumPoolThroughputMibps`: fixed to `128`
