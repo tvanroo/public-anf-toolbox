@@ -55,6 +55,13 @@
         "description": "Time zone used by the daily run schedule (for example: UTC)."
       }
     },
+    "scheduleStartTimeUtc": {
+      "type": "string",
+      "defaultValue": "[dateTimeAdd(utcNow('u'), 'PT15M')]",
+      "metadata": {
+        "description": "UTC start time for the first run. Default is deployment time + 15 minutes."
+      }
+    },
     "runbookScriptUri": {
       "type": "string",
       "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1?v=20260609b",
@@ -68,7 +75,6 @@
     "runbookName": "ANF-QoS-SelfLeveling-FSL",
     "scheduleName": "anf-qos-selfleveling-24h",
     "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
-    "scheduleStartTimeUtc": "[dateTimeAdd(utcNow('u'), 'PT15M')]",
     "standardTags": {
       "managed-by": "public-anf-toolbox",
       "solution": "anf-qos-self-leveling-fsl",
@@ -201,7 +207,7 @@
       ],
       "properties": {
         "description": "Daily 24-hour schedule for ANF QoS Self Leveling FSL runbook.",
-        "startTime": "[variables('scheduleStartTimeUtc')]",
+        "startTime": "[parameters('scheduleStartTimeUtc')]",
         "frequency": "Day",
         "interval": 1,
         "timeZone": "[parameters('scheduleTimeZone')]"
