@@ -137,8 +137,6 @@ Post-deploy requirement:
 ## Deploy-in-Azure input guidance (proposed)
 
 ### Inputs to prompt for
-- `location`
-- `identityType` (recommended default: `SystemAssigned`)
 - `anfResourceGroupName`
 - `anfAccountName`
 - `anfPoolName`
@@ -149,6 +147,8 @@ Post-deploy requirement:
 
 ### Inputs to auto-generate or fix
 - Automation account name: auto-generated
+- Region/location: uses the deployment resource group's region (portal Region selector)
+- Managed identity type: fixed to SystemAssigned
 - Runbook name: fixed
 - Schedule name: fixed
 - Frequency: every 24 hours

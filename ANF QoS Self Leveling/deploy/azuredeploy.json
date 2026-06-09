@@ -2,13 +2,6 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "location": {
-      "type": "string",
-      "defaultValue": "eastus",
-      "metadata": {
-        "description": "Azure region where the Automation Account will be created (for example: eastus)."
-      }
-    },
     "anfResourceGroupName": {
       "type": "string",
       "metadata": {
@@ -89,7 +82,7 @@
       "type": "Microsoft.Automation/automationAccounts",
       "apiVersion": "2023-11-01",
       "name": "[variables('automationAccountName')]",
-      "location": "[parameters('location')]",
+      "location": "[resourceGroup().location]",
       "identity": {
         "type": "SystemAssigned"
       },
@@ -183,7 +176,7 @@
       "type": "Microsoft.Automation/automationAccounts/runbooks",
       "apiVersion": "2023-11-01",
       "name": "[concat(variables('automationAccountName'), '/', variables('runbookName'))]",
-      "location": "[parameters('location')]",
+      "location": "[resourceGroup().location]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
