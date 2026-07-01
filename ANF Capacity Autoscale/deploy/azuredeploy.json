@@ -4,7 +4,7 @@
   "parameters": {
     "automationAccountName": {
       "type": "string",
-      "defaultValue": "ANF-Capacity-Autoscale",
+      "defaultValue": "[concat('ANF-Capacity-Autoscale-', take(uniqueString(resourceGroup().id, deployment().name), 6))]",
       "metadata": {
         "description": "Automation Account name. Change this if the name already exists in the deployment resource group, or clear it to generate a unique name."
       }
