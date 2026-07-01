@@ -15,6 +15,14 @@ By using any content from this repository, you acknowledge that you do so at you
 [ANF Capacity Autoscale](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1)
     - Monitors volume capacity utilization and automatically adjusts volume sizes to prevent running out of space while keeping the pool size optimized for cost efficiency. Analyzes consumption trends and proactively resizes volumes when utilization thresholds are reached.
 
+## Flexible Service Level behavior
+
+- The main capacity autoscale script now detects the capacity pool service level before planning changes.
+- Standard, Premium, and Ultra manual QoS pools keep the previous behavior: available throughput is calculated from the pool-size-derived throughput budget and allocated proportionally to volumes, while respecting `ANF_VolumeMinThroughputMap`.
+- Flexible Service Level pools require Manual QoS. Their capacity and throughput are planned independently: resizing the pool for capacity does not reduce or increase throughput just because the pool size changed.
+- For Flexible Service Level pools, the script allocates volume throughput from the current pool throughput. It only plans a pool throughput increase when the configured per-volume minimum throughput requirements exceed the current pool throughput or the `ANF_MinimumPoolThroughputMibps` floor.
+- `ANF_MinimumPoolThroughputMibps` defaults to `128`, matching the included per-pool Flexible Service Level throughput floor.
+
 ## GA Safety Notes
 
 - Both autoscale scripts default to test mode. `ANF_TestMode` must be set to `No` before pool, volume, or throughput changes are applied.

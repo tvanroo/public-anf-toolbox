@@ -59,14 +59,17 @@ Azure Automation Account Setup Requirements:
    - ANF_VolumeMinThroughputMap: JSON string mapping volume names to minimum throughput
      Example: '{"vol1":10,"vol2":15,"vol3":5}' - sets minimum MiB/s per volume
    - ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 1000)
-     Overrides the calculated pool MiB/s per TiB ratio for total pool throughput calculation
+     Overrides the calculated pool MiB/s per TiB ratio for classic manual QoS throughput calculation
+   - ANF_MinimumPoolThroughputMibps: Minimum Flexible service level pool throughput (int, default: 128)
+     Used only for Flexible service level pools, where capacity and throughput are managed independently
 
 6. VOLUME EXPANSION/CONTRACTION LOGIC:
    - Expands volume if utilization % OR absolute GiB threshold is exceeded
    - Contracts volume if both thresholds have sufficient headroom (15% buffer)
    - Pool automatically resizes in TiB increments for maximum cost efficiency
    - Pool expands when volumes won't fit, contracts when full TiB can be freed
-   - QoS throughput allocated proportionally with per-volume minimums respected
+   - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
+   - Flexible service level throughput is allocated from current pool throughput and is not derived from pool capacity
 
 4. RECOMMENDED SCHEDULE:
    - Run every 4-6 hours for proactive management
@@ -158,6 +161,9 @@ foreach ($module in $requiredModules) {
     # Maximum throughput per TiB setting (used to cap volume throughput allocation)
     $maxThroughputPerTiB = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MaxThroughputPerTiB" -ErrorAction SilentlyContinue } else { $null }
     if (-not $maxThroughputPerTiB) { $maxThroughputPerTiB = 68 }               # Default: 1000 MiB/s per TiB (no effective limit for most cases)
+
+    $minimumPoolThroughputMibps = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MinimumPoolThroughputMibps" -ErrorAction SilentlyContinue } else { $null }
+    if (-not $minimumPoolThroughputMibps) { $minimumPoolThroughputMibps = 128 } # Flexible service level included pool throughput floor
     
     # Monitoring Settings
     $capacityLookBackHours = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_CapacityLookBackHours" -ErrorAction SilentlyContinue } else { $null }
@@ -186,6 +192,7 @@ if ($volumeMinThroughputMap.Count -gt 0) {
     Write-Output "Volume Min Throughput Map: $($volumeMinThroughputMap.Count) volumes configured"
 }
 Write-Output "Max Throughput per TiB: $maxThroughputPerTiB MiB/s"
+Write-Output "Minimum FSL Pool Throughput: $minimumPoolThroughputMibps MiB/s"
 
 if ($testMode -eq "Yes") {
     Write-Output "Running in TEST MODE - no changes will be made"
@@ -208,6 +215,453 @@ if (-not $anfAccountName -or $anfAccountName -eq "example-anf-acct") {
 if (-not $anfPoolName -or $anfPoolName -eq "example-anf-pool") {
     Write-Error "ANF_PoolName must be set before running this script"
     throw "Missing required variable: ANF_PoolName"
+}
+
+$anfApiVersion = "2026-04-01"
+
+function Get-AnfObjectProperty {
+    param(
+        [Parameter(Mandatory=$true)][object]$InputObject,
+        [Parameter(Mandatory=$true)][string[]]$PropertyNames
+    )
+
+    foreach ($propertyName in $PropertyNames) {
+        if ($InputObject -is [System.Collections.IDictionary] -and $InputObject.Contains($propertyName)) {
+            return $InputObject[$propertyName]
+        }
+
+        $property = $InputObject.PSObject.Properties | Where-Object { $_.Name -eq $propertyName } | Select-Object -First 1
+        if ($property) {
+            return $property.Value
+        }
+    }
+
+    return $null
+}
+
+function Resolve-AnfThroughputMibpsFromProperties {
+    param([object]$Properties)
+
+    if ($null -eq $Properties) {
+        return $null
+    }
+
+    $throughputCandidates = @(
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('totalThroughputMibps', 'TotalThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('throughputMibps', 'ThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('provisionedThroughputMibps', 'ProvisionedThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('actualThroughputMibps', 'ActualThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('customThroughputMibps', 'CustomThroughputMibps'))
+    )
+
+    foreach ($candidate in $throughputCandidates) {
+        if ($null -ne $candidate -and "$candidate" -ne "") {
+            try {
+                return [double]$candidate
+            } catch {}
+        }
+    }
+
+    return $null
+}
+
+function Convert-ToWholeThroughputMibps {
+    param(
+        [Parameter(Mandatory=$true)][double]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+
+    $rounded = [int][math]::Round($Value, 0, [System.MidpointRounding]::AwayFromZero)
+    if ($rounded -lt $Minimum) {
+        return $Minimum
+    }
+
+    return $rounded
+}
+
+function Test-AnfFlexibleServiceLevel {
+    param([object]$ServiceLevel)
+
+    if ($null -eq $ServiceLevel) {
+        return $false
+    }
+
+    return "$ServiceLevel".Trim().ToLowerInvariant() -eq "flexible"
+}
+
+function Get-AnfVolumeShortName {
+    param([Parameter(Mandatory=$true)][object]$VolumeObject)
+
+    $name = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('ShortName', 'Name', 'name')
+    if ($name -and "$name".Contains('/')) {
+        return ("$name".Split('/')[-1])
+    }
+
+    if ($name) {
+        return "$name"
+    }
+
+    $id = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('Id', 'id')
+    if ($id -and "$id" -match "/volumes/([^/]+)$") {
+        return $Matches[1]
+    }
+
+    throw "Unable to resolve volume short name from volume object."
+}
+
+function Invoke-AnfArmJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$BodyJson
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceManagerUrl = $context.Environment.ResourceManagerUrl.TrimEnd('/')
+    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate(
+        $context.Account,
+        $context.Environment,
+        $context.Tenant.Id,
+        $null,
+        "Never",
+        $null,
+        "$resourceManagerUrl/"
+    ).AccessToken
+
+    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion"
+    $headers = @{
+        'Authorization' = "Bearer $token"
+        'Content-Type' = 'application/json'
+    }
+
+    if ($BodyJson) {
+        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $BodyJson -ErrorAction Stop
+    }
+
+    return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+}
+
+function Get-AnfRestErrorDetails {
+    param(
+        [Parameter(Mandatory=$true)][object]$ErrorRecord
+    )
+
+    $errorCode = $null
+    $errorMessage = $null
+    if ($ErrorRecord.Exception -and $ErrorRecord.Exception.Response) {
+        try {
+            $stream = $ErrorRecord.Exception.Response.GetResponseStream()
+            if ($stream) {
+                $reader = New-Object System.IO.StreamReader($stream)
+                $responseText = $reader.ReadToEnd()
+                if ($responseText) {
+                    try {
+                        $responseJson = $responseText | ConvertFrom-Json -ErrorAction Stop
+                        if ($responseJson.error) {
+                            $errorCode = $responseJson.error.code
+                            $errorMessage = $responseJson.error.message
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
+    }
+
+    if (-not $errorMessage) {
+        $errorMessage = $ErrorRecord.Exception.Message
+    }
+
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $errorDetailsMessage = "$($ErrorRecord.ErrorDetails.Message)"
+        if ($errorDetailsMessage) {
+            try {
+                $errorDetailsJson = $errorDetailsMessage | ConvertFrom-Json -ErrorAction Stop
+                if ($errorDetailsJson.error) {
+                    if (-not $errorCode -and $errorDetailsJson.error.code) {
+                        $errorCode = $errorDetailsJson.error.code
+                    }
+                    if ($errorDetailsJson.error.message) {
+                        $errorMessage = $errorDetailsJson.error.message
+                    }
+                }
+            } catch {
+                if (-not $errorMessage -or $errorMessage -match "Bad Request") {
+                    $errorMessage = $errorDetailsMessage
+                }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Code = $errorCode
+        Message = $errorMessage
+    }
+}
+
+function Convert-AnfRestPool {
+    param([Parameter(Mandatory=$true)][object]$Pool)
+
+    $poolProperties = $Pool.properties
+    $resolvedSize = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('size', 'Size')
+    $resolvedServiceLevel = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('serviceLevel', 'ServiceLevel')
+    $resolvedQosType = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('qosType', 'QosType')
+    $resolvedThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $poolProperties
+    if ($null -eq $resolvedThroughputMibps) {
+        $resolvedThroughputMibps = 0
+    }
+
+    return [PSCustomObject]@{
+        Id = $Pool.id
+        Name = $Pool.name
+        Size = [double]$resolvedSize
+        ServiceLevel = $resolvedServiceLevel
+        QosType = $resolvedQosType
+        TotalThroughputMibps = [double]$resolvedThroughputMibps
+        Raw = $Pool
+    }
+}
+
+function Get-AnfPool {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName"
+    $poolCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($poolCandidate -and $poolCandidate.error) {
+        throw "Capacity pool REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($poolCandidate.error.code)' message='$($poolCandidate.error.message)'"
+    }
+
+    $pool = $null
+    if ($poolCandidate -and $poolCandidate.properties) {
+        $pool = $poolCandidate
+    } elseif ($poolCandidate -and $poolCandidate.value -and $poolCandidate.value.Count -gt 0) {
+        $pool = $poolCandidate.value[0]
+    }
+
+    if (-not $pool) {
+        $topLevelProps = @()
+        if ($poolCandidate) { $topLevelProps = @($poolCandidate.PSObject.Properties.Name) }
+        throw "Unable to parse capacity pool REST response for $ResourceGroupName/$AccountName/$PoolName. Top-level properties present: $($topLevelProps -join ', ')"
+    }
+
+    return Convert-AnfRestPool -Pool $pool
+}
+
+function Convert-AnfRestVolume {
+    param([Parameter(Mandatory=$true)][object]$Volume)
+
+    $volumeProperties = $Volume.properties
+    $resolvedThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $volumeProperties
+    if ($null -eq $resolvedThroughputMibps) {
+        $resolvedThroughputMibps = 0
+    }
+
+    $usageThreshold = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('usageThreshold', 'UsageThreshold')
+    $volumeName = Get-AnfVolumeShortName -VolumeObject $Volume
+
+    return [PSCustomObject]@{
+        Id = $Volume.id
+        Name = $volumeName
+        Tags = $Volume.tags
+        UsageThreshold = [double]$usageThreshold
+        ActualThroughputMibps = [double]$resolvedThroughputMibps
+        ThroughputMibps = [double]$resolvedThroughputMibps
+        Raw = $Volume
+    }
+}
+
+function Get-AnfVolumes {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes"
+    $volumesCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($volumesCandidate -and $volumesCandidate.error) {
+        throw "Volume list REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($volumesCandidate.error.code)' message='$($volumesCandidate.error.message)'"
+    }
+
+    $volumes = @()
+    if ($volumesCandidate -and $volumesCandidate.value) {
+        $volumes = @($volumesCandidate.value)
+    } elseif ($volumesCandidate -and $volumesCandidate.id) {
+        $volumes = @($volumesCandidate)
+    }
+
+    return @($volumes | ForEach-Object { Convert-AnfRestVolume -Volume $_ })
+}
+
+function Get-AnfVolume {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][string]$VolumeName
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes/$VolumeName"
+    $volume = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($volume -and $volume.error) {
+        throw "Volume REST API returned error for $ResourceGroupName/$AccountName/$PoolName/$VolumeName. code='$($volume.error.code)' message='$($volume.error.message)'"
+    }
+
+    return Convert-AnfRestVolume -Volume $volume
+}
+
+function Update-AnfPoolSize {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][double]$TargetSizeBytes,
+        [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
+    )
+
+    if (-not $IsFlexibleServiceLevel) {
+        try {
+            $null = Update-AzNetAppFilesPool -ResourceGroupName $ResourceGroupName -AccountName $AccountName -Name $PoolName -PoolSize $TargetSizeBytes -ErrorAction Stop
+            Write-Output "Pool resize completed successfully using PowerShell cmdlet"
+            return
+        } catch {
+            Write-Warning "PowerShell pool resize failed, attempting REST API fallback: $($_.Exception.Message)"
+        }
+    }
+
+    $context = Get-AzContext -ErrorAction Stop
+    $poolResourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName"
+    $poolSizeApiVersion = if ($IsFlexibleServiceLevel) { "2024-07-01-preview" } else { $anfApiVersion }
+    $body = @{
+        properties = @{
+            size = $TargetSizeBytes
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $poolResourceId -ApiVersion $poolSizeApiVersion -BodyJson $body
+    Write-Output "Pool resize completed successfully using REST API ($poolSizeApiVersion)"
+}
+
+function Update-AnfFslPoolThroughputMibps {
+    param(
+        [Parameter(Mandatory=$true)][string]$PoolResourceId,
+        [Parameter(Mandatory=$true)][double]$TargetThroughputMibps
+    )
+
+    $targetRounded = Convert-ToWholeThroughputMibps -Value $TargetThroughputMibps -Minimum 0
+    $poolUpdateApiVersion = "2024-07-01-preview"
+    $propertyCandidates = @("customThroughputMibps", "provisionedThroughputMibps", "totalThroughputMibps")
+    $lastErrorDetails = $null
+    $sawCooldownOrDeferredDecreaseSignal = $false
+    $deferredDecreaseMessage = $null
+
+    foreach ($propertyName in $propertyCandidates) {
+        try {
+            $body = @{
+                properties = @{
+                    $propertyName = $targetRounded
+                }
+            } | ConvertTo-Json -Depth 3
+            $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $poolUpdateApiVersion -BodyJson $body
+            return
+        } catch {
+            $lastErrorDetails = Get-AnfRestErrorDetails -ErrorRecord $_
+            $lastErrorMessage = "$($lastErrorDetails.Message)"
+            if (
+                $lastErrorDetails.Code -eq "PoolCustomThroughputCanNotBeDecreasedDuringCoolDownPeriod" -or
+                $lastErrorMessage -match "cool.?down"
+            ) {
+                $sawCooldownOrDeferredDecreaseSignal = $true
+                if (-not $deferredDecreaseMessage) {
+                    $deferredDecreaseMessage = $lastErrorMessage
+                }
+            }
+        }
+    }
+
+    if ($sawCooldownOrDeferredDecreaseSignal) {
+        throw "Failed to update pool throughput to $targetRounded MiB/s via REST API. code='PoolCustomThroughputCanNotBeDecreasedDuringCoolDownPeriod' message='$deferredDecreaseMessage'"
+    }
+
+    $detailSuffix = ""
+    if ($lastErrorDetails) {
+        if ($lastErrorDetails.Code) {
+            $detailSuffix = " code='$($lastErrorDetails.Code)'"
+        }
+        if ($lastErrorDetails.Message) {
+            $detailSuffix = "$detailSuffix message='$($lastErrorDetails.Message)'"
+        }
+    }
+
+    throw "Failed to update pool throughput to $targetRounded MiB/s via REST API.$detailSuffix"
+}
+
+function Update-AnfVolumeCapacity {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][string]$VolumeName,
+        [Parameter(Mandatory=$true)][string]$VolumeResourceId,
+        [Parameter(Mandatory=$true)][double]$TargetSizeBytes,
+        [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
+    )
+
+    if (-not $IsFlexibleServiceLevel) {
+        try {
+            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -Name $VolumeName -ErrorAction Stop
+            $null = $anfVolume | Update-AzNetAppFilesVolume -UsageThreshold $TargetSizeBytes -ErrorAction Stop
+            return
+        } catch {
+            Write-Warning "PowerShell volume resize failed for '$VolumeName', attempting REST API fallback: $($_.Exception.Message)"
+        }
+    }
+
+    $body = @{
+        properties = @{
+            usageThreshold = $TargetSizeBytes
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $VolumeResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
+function Update-AnfVolumeThroughput {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][string]$VolumeName,
+        [Parameter(Mandatory=$true)][string]$VolumeResourceId,
+        [Parameter(Mandatory=$true)][double]$TargetThroughputMibps,
+        [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
+    )
+
+    $targetWholeMibps = Convert-ToWholeThroughputMibps -Value $TargetThroughputMibps -Minimum 1
+    if (-not $IsFlexibleServiceLevel) {
+        try {
+            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -Name $VolumeName -ErrorAction Stop
+            $null = $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $targetWholeMibps -ErrorAction Stop
+            return
+        } catch {
+            Write-Warning "PowerShell throughput update failed for '$VolumeName', attempting REST API fallback: $($_.Exception.Message)"
+        }
+    }
+
+    $body = @{
+        properties = @{
+            throughputMibps = $targetWholeMibps
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $VolumeResourceId -ApiVersion $anfApiVersion -BodyJson $body
 }
 
 # Connect to Azure using Managed Identity (for Automation Account) or device code login
@@ -301,7 +755,7 @@ try {
 # Get the Azure NetApp Files capacity pool details
 Write-Output "Connecting to ANF Pool: $anfPoolName..."
 try {
-    $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction Stop
+    $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
     Write-Output "Successfully connected to ANF Pool: $anfPoolName"
 } catch {
     Write-Error "Failed to connect to ANF Pool: $anfPoolName. $_"
@@ -310,11 +764,22 @@ try {
 
 # Display pool information
 $poolSizeTiB = [math]::Round($anfPool.Size / 1024 / 1024 / 1024 / 1024, 2)
+$poolServiceLevel = $anfPool.ServiceLevel
 $poolQosType = $anfPool.QosType
-Write-Output "Pool Size: $poolSizeTiB TiB ($($anfPool.ServiceLevel) service level, $poolQosType QoS)"
+$isFlexibleServiceLevel = Test-AnfFlexibleServiceLevel -ServiceLevel $poolServiceLevel
+Write-Output "Pool Size: $poolSizeTiB TiB ($poolServiceLevel service level, $poolQosType QoS)"
+
+if ($isFlexibleServiceLevel -and $poolQosType -ne "Manual") {
+    Write-Error "Flexible service level pools require Manual QoS. Pool '$anfPoolName' reported QoS type '$poolQosType'."
+    throw "Invalid Flexible service level QoS configuration"
+}
 
 # Get pool throughput information for QoS calculations
 $poolMaxThroughput = if ($poolQosType -eq "Manual") { $anfPool.TotalThroughputMibps } else { 0 }
+if ($isFlexibleServiceLevel) {
+    Write-Output "Flexible service level detected. Pool capacity and pool throughput will be planned independently."
+    Write-Output "Current FSL pool throughput: $poolMaxThroughput MiB/s"
+}
 
 # Get list of Volumes within Capacity Pool
 Write-Output "Getting volumes in pool..."
@@ -334,9 +799,9 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
         # Increase timeout for volume retrieval
         $PSDefaultParameterValues['*-Az*:HttpPipelineTimeout'] = 300  # 5 minutes
         
-        Write-Output "Attempting to retrieve volumes using PowerShell cmdlet (timeout: 300s)..."
+        Write-Output "Attempting to retrieve volumes using ANF REST API (timeout: 300s)..."
         $startTime = Get-Date
-        $anfVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction Stop
+        $anfVolumes = Get-AnfVolumes -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $elapsed = (Get-Date) - $startTime
         
         if ($anfVolumes) {
@@ -360,7 +825,7 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
                     
                     # Construct REST API URL
                     $subscriptionId = $context.Subscription.Id
-                    $apiVersion = "2024-07-01-preview"
+                    $apiVersion = $anfApiVersion
                     $uri = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName/volumes?api-version=$apiVersion"
                     
                     $headers = @{
@@ -373,8 +838,7 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
                     
                     if ($restResponse.value) {
                         Write-Output "Successfully retrieved $($restResponse.value.Count) volume(s) using REST API"
-                        # Convert REST response to compatible object format
-                        $anfVolumes = $restResponse.value
+                        $anfVolumes = @($restResponse.value | ForEach-Object { Convert-AnfRestVolume -Volume $_ })
                         break
                     }
                 } catch {
@@ -408,7 +872,8 @@ Write-Output "Found $($anfVolumes.Count) volume(s) in pool"
 Write-Output "Collecting capacity metrics for volumes..."
 $volumeData = @()
 foreach ($anfVolume in $anfVolumes) {
-    Write-Output "  Processing volume: $($anfVolume.Name.Split('/')[2])"
+    $volumeName = Get-AnfVolumeShortName -VolumeObject $anfVolume
+    Write-Output "  Processing volume: $volumeName"
     
     # Get current capacity metrics
     try {
@@ -432,7 +897,7 @@ foreach ($anfVolume in $anfVolumes) {
         $maxConsumedSizeGiB = [math]::Round($maxConsumedSizeBytes / 1024 / 1024 / 1024, 2)
         
     } catch {
-        Write-Warning "Could not retrieve capacity metrics for volume $($anfVolume.Name.Split('/')[2]): $_"
+        Write-Warning "Could not retrieve capacity metrics for volume $volumeName`: $_"
         $avgConsumedSizeGiB = 0
         $maxConsumedSizeGiB = 0
     }
@@ -449,14 +914,14 @@ foreach ($anfVolume in $anfVolumes) {
     $freeSpaceGiB = [math]::Round($currentVolumeSizeGiB - $maxConsumedSizeGiB, 2)
     
     # Get current throughput if QoS is Manual
-    $currentThroughputMibps = if ($poolQosType -eq "Manual" -and $anfVolume.ActualThroughputMibps) { 
-        $anfVolume.ActualThroughputMibps 
-    } else { 
-        0 
+    $resolvedCurrentThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $anfVolume
+    $currentThroughputMibps = if ($poolQosType -eq "Manual" -and $null -ne $resolvedCurrentThroughputMibps) {
+        $resolvedCurrentThroughputMibps
+    } else {
+        0
     }
     
     # Get minimum throughput for this volume
-    $volumeName = $anfVolume.Name.Split('/')[2]
     $minThroughputMibps = if ($volumeMinThroughputMap.ContainsKey($volumeName)) { 
         $volumeMinThroughputMap[$volumeName] 
     } else { 
@@ -610,27 +1075,44 @@ if ($canShrinkToTiB -gt 0) {
 }
 
 # Calculate QoS throughput allocation if pool is Manual QoS
+$newPoolMaxThroughput = 0
+$poolThroughputNeedsUpdate = $false
 if ($poolQosType -eq "Manual") {
     Write-Output ""
     Write-Output "Calculating QoS throughput allocation..."
     
-    # Calculate the new pool throughput based on the ratio of new to current pool size
-    # This accounts for pool expansion/contraction affecting available throughput
-    $currentPoolSizeTiBForCalc = [math]::Max($currentPoolSizeTiB, 0.1)  # Avoid division by zero
-    $calculatedThroughputPerTiB = $poolMaxThroughput / $currentPoolSizeTiBForCalc
-    
-    # Apply max throughput per TiB limit (allows overriding the calculated ratio)
-    $effectiveThroughputPerTiB = [math]::Min($calculatedThroughputPerTiB, $maxThroughputPerTiB)
-    $newPoolMaxThroughput = [math]::Round($effectiveThroughputPerTiB * $optimalPoolSizeTiB, 0)
-    
-    Write-Output "  Current pool throughput: $poolMaxThroughput MiB/s ($currentPoolSizeTiB TiB)"
-    Write-Output "  Calculated throughput per TiB: $([math]::Round($calculatedThroughputPerTiB, 1)) MiB/s"
-    Write-Output "  Max throughput per TiB limit: $maxThroughputPerTiB MiB/s"
-    Write-Output "  Effective throughput per TiB: $([math]::Round($effectiveThroughputPerTiB, 1)) MiB/s"
-    Write-Output "  New pool throughput: $newPoolMaxThroughput MiB/s ($optimalPoolSizeTiB TiB)"
-    
     # Get total minimum throughput requirements
     $totalMinThroughput = ($volumeData | Measure-Object -Property MinThroughputMibps -Sum).Sum
+
+    if ($isFlexibleServiceLevel) {
+        Write-Output "  Flexible service level: capacity and throughput are managed independently"
+        Write-Output "  Current FSL pool throughput: $poolMaxThroughput MiB/s"
+        Write-Output "  Minimum FSL pool throughput floor: $minimumPoolThroughputMibps MiB/s"
+
+        $newPoolMaxThroughput = Convert-ToWholeThroughputMibps -Value ([math]::Max([double]$poolMaxThroughput, [double]$minimumPoolThroughputMibps)) -Minimum $minimumPoolThroughputMibps
+        if ($totalMinThroughput -gt $newPoolMaxThroughput) {
+            Write-Warning "Total minimum volume throughput ($totalMinThroughput MiB/s) exceeds current FSL pool throughput ($newPoolMaxThroughput MiB/s). The script will plan an FSL pool throughput increase before volume updates."
+            $newPoolMaxThroughput = Convert-ToWholeThroughputMibps -Value $totalMinThroughput -Minimum $minimumPoolThroughputMibps
+        }
+
+        $poolThroughputNeedsUpdate = $newPoolMaxThroughput -ne (Convert-ToWholeThroughputMibps -Value $poolMaxThroughput -Minimum 0)
+        Write-Output "  Target FSL pool throughput: $newPoolMaxThroughput MiB/s"
+    } else {
+        # Classic manual QoS pool throughput tracks pool size. Flexible service level pools skip this calculation.
+        $currentPoolSizeTiBForCalc = [math]::Max($currentPoolSizeTiB, 0.1)  # Avoid division by zero
+        $calculatedThroughputPerTiB = $poolMaxThroughput / $currentPoolSizeTiBForCalc
+
+        # Apply max throughput per TiB limit (allows overriding the calculated ratio)
+        $effectiveThroughputPerTiB = [math]::Min($calculatedThroughputPerTiB, $maxThroughputPerTiB)
+        $newPoolMaxThroughput = [math]::Round($effectiveThroughputPerTiB * $optimalPoolSizeTiB, 0)
+
+        Write-Output "  Current pool throughput: $poolMaxThroughput MiB/s ($currentPoolSizeTiB TiB)"
+        Write-Output "  Calculated throughput per TiB: $([math]::Round($calculatedThroughputPerTiB, 1)) MiB/s"
+        Write-Output "  Max throughput per TiB limit: $maxThroughputPerTiB MiB/s"
+        Write-Output "  Effective throughput per TiB: $([math]::Round($effectiveThroughputPerTiB, 1)) MiB/s"
+        Write-Output "  New pool throughput: $newPoolMaxThroughput MiB/s ($optimalPoolSizeTiB TiB)"
+    }
+
     $availableThroughput = $newPoolMaxThroughput - $totalMinThroughput
     
     if ($availableThroughput -lt 0) {
@@ -698,8 +1180,15 @@ Write-Output ""
 Write-Output "Change summary:"
 Write-Output "  Volumes needing resize: $($volumesNeedingResize.Count)"
 Write-Output "  Pool resize needed: $($poolNeedsResize)"
+Write-Output "  Pool service level: $poolServiceLevel"
 if ($poolQosType -eq "Manual") {
     Write-Output "  Volumes needing QoS-only changes: $($volumesNeedingQoSOnly.Count)"
+    if ($isFlexibleServiceLevel) {
+        Write-Output "  FSL pool throughput update needed: $poolThroughputNeedsUpdate"
+        if ($poolThroughputNeedsUpdate) {
+            Write-Output "    -> Pool throughput: $poolMaxThroughput -> $newPoolMaxThroughput MiB/s"
+        }
+    }
     if ($volumesNeedingQoSOnly.Count -gt 0) {
         foreach ($volume in $volumesNeedingQoSOnly) {
             Write-Output "    → $($volume.ShortName): $($volume.CurrentThroughputMibps) → $($volume.NewThroughputMibps) MiB/s"
@@ -708,13 +1197,29 @@ if ($poolQosType -eq "Manual") {
 }
 
 # Execute changes if not in test mode
-if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsResize -or $volumesNeedingQoSOnly.Count -gt 0)) {
+if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsResize -or $volumesNeedingQoSOnly.Count -gt 0 -or $poolThroughputNeedsUpdate)) {
     Write-Output ""
     Write-Output "Executing capacity and QoS changes..."
     
     # Determine execution order based on operation type
     $isPoolExpansion = $poolAction -eq "Expand"
     $isPoolContraction = $poolAction -eq "Contract"
+    $isPoolThroughputIncrease = $poolThroughputNeedsUpdate -and $newPoolMaxThroughput -gt $poolMaxThroughput
+    $isPoolThroughputDecrease = $poolThroughputNeedsUpdate -and $newPoolMaxThroughput -lt $poolMaxThroughput
+
+    if ($isFlexibleServiceLevel -and $isPoolThroughputIncrease) {
+        Write-Output "FSL pool throughput increase needed - updating pool throughput before volume throughput changes..."
+        Write-Output "Updating FSL pool throughput from $poolMaxThroughput MiB/s to $newPoolMaxThroughput MiB/s..."
+        try {
+            Update-AnfFslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $newPoolMaxThroughput
+            $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+            $poolMaxThroughput = $anfPool.TotalThroughputMibps
+            Write-Output "FSL pool throughput updated successfully. Current pool throughput: $poolMaxThroughput MiB/s"
+        } catch {
+            Write-Error "Failed to update FSL pool throughput: $_"
+            Write-Output "Continuing with capacity operations; volume throughput increases that exceed current pool throughput may fail."
+        }
+    }
     
     # EXPANSION: Pool first, then volumes (volumes need space to grow)
     if ($isPoolExpansion -and $poolNeedsResize) {
@@ -722,49 +1227,11 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         Write-Output "Resizing pool from $currentPoolSizeGiB GiB to $optimalPoolSizeGiB GiB ($poolAction)..."
         try {
             $newPoolSizeBytes = $optimalPoolSizeGiB * 1024 * 1024 * 1024
-            
-            # Try PowerShell cmdlet first
-            try {
-                $null = Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -PoolSize $newPoolSizeBytes -ErrorAction Stop
-                Write-Output "Pool resize completed successfully using PowerShell cmdlet"
-            } catch {
-                # If PowerShell cmdlet fails with API version error, try REST API
-                if ($_.Exception.Message -like "*api-version*" -and $_.Exception.Message -like "*Flexible service level*") {
-                    Write-Output "PowerShell cmdlet failed with API version error, attempting REST API call..."
-                    
-                    # Get access token
-                    $context = Get-AzContext
-                    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id, $null, "Never", $null, "https://management.azure.com/").AccessToken
-                    
-                    # Construct REST API URL and body
-                    $subscriptionId = $context.Subscription.Id
-                    $apiVersion = "2024-07-01-preview"
-                    $poolResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName"
-                    $uri = "https://management.azure.com$poolResourceId" + "?api-version=$apiVersion"
-                    
-                    $body = @{
-                        properties = @{
-                            size = $newPoolSizeBytes
-                        }
-                    } | ConvertTo-Json -Depth 3
-                    
-                    $headers = @{
-                        'Authorization' = "Bearer $token"
-                        'Content-Type' = 'application/json'
-                    }
-                    
-                    # Make REST API call
-                    $response = Invoke-RestMethod -Uri $uri -Method PATCH -Body $body -Headers $headers -ErrorAction Stop
-                    Write-Output "Pool resize completed successfully using REST API (2024-07-01-preview)"
-                } else {
-                    # Re-throw if it's not an API version issue
-                    throw
-                }
-            }
+            Update-AnfPoolSize -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
             
             # Refresh pool information for throughput calculations
             if ($poolQosType -eq "Manual") {
-                $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction Stop
+                $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
                 $poolMaxThroughput = $anfPool.TotalThroughputMibps
                 Write-Output "Updated pool max throughput: $poolMaxThroughput MiB/s"
             }
@@ -783,8 +1250,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
             Write-Output "Resizing volume '$($volume.ShortName)' from $($volume.CurrentSizeGiB) GiB to $($volume.NewSizeGiB) GiB ($($volume.ResizeAction))..."
             try {
                 $newVolumeSizeBytes = $volume.NewSizeGiB * 1024 * 1024 * 1024
-                $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.ShortName -ErrorAction Stop
-                $null = $anfVolume | Update-AzNetAppFilesVolume -UsageThreshold $newVolumeSizeBytes -ErrorAction Stop
+                Update-AnfVolumeCapacity -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -VolumeName $volume.ShortName -VolumeResourceId $volume.VolumeId -TargetSizeBytes $newVolumeSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
                 Write-Output "Volume '$($volume.ShortName)' resized successfully"
                 $volumeChanged = $true
             } catch {
@@ -796,10 +1262,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         if ($poolQosType -eq "Manual" -and $volume.NewThroughputMibps -ne $volume.CurrentThroughputMibps) {
             Write-Output "Updating volume '$($volume.ShortName)' throughput from $($volume.CurrentThroughputMibps) to $($volume.NewThroughputMibps) MiB/s..."
             try {
-                if (-not $volumeChanged) {
-                    $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volume.ShortName -ErrorAction Stop
-                }
-                $null = $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $volume.NewThroughputMibps -ErrorAction Stop
+                Update-AnfVolumeThroughput -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -VolumeName $volume.ShortName -VolumeResourceId $volume.VolumeId -TargetThroughputMibps $volume.NewThroughputMibps -IsFlexibleServiceLevel $isFlexibleServiceLevel
                 Write-Output "Volume '$($volume.ShortName)' throughput updated successfully"
             } catch {
                 Write-Error "Failed to update throughput for volume '$($volume.ShortName)': $_"
@@ -813,49 +1276,11 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         Write-Output "Resizing pool from $currentPoolSizeGiB GiB to $optimalPoolSizeGiB GiB ($poolAction)..."
         try {
             $newPoolSizeBytes = $optimalPoolSizeGiB * 1024 * 1024 * 1024
-            
-            # Try PowerShell cmdlet first
-            try {
-                $null = Update-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -PoolSize $newPoolSizeBytes -ErrorAction Stop
-                Write-Output "Pool resize completed successfully using PowerShell cmdlet"
-            } catch {
-                # If PowerShell cmdlet fails with API version error, try REST API
-                if ($_.Exception.Message -like "*api-version*" -and $_.Exception.Message -like "*Flexible service level*") {
-                    Write-Output "PowerShell cmdlet failed with API version error, attempting REST API call..."
-                    
-                    # Get access token
-                    $context = Get-AzContext
-                    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id, $null, "Never", $null, "https://management.azure.com/").AccessToken
-                    
-                    # Construct REST API URL and body
-                    $subscriptionId = $context.Subscription.Id
-                    $apiVersion = "2024-07-01-preview"
-                    $poolResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName"
-                    $uri = "https://management.azure.com$poolResourceId" + "?api-version=$apiVersion"
-                    
-                    $body = @{
-                        properties = @{
-                            size = $newPoolSizeBytes
-                        }
-                    } | ConvertTo-Json -Depth 3
-                    
-                    $headers = @{
-                        'Authorization' = "Bearer $token"
-                        'Content-Type' = 'application/json'
-                    }
-                    
-                    # Make REST API call
-                    $response = Invoke-RestMethod -Uri $uri -Method PATCH -Body $body -Headers $headers -ErrorAction Stop
-                    Write-Output "Pool resize completed successfully using REST API (2024-07-01-preview)"
-                } else {
-                    # Re-throw if it's not an API version issue
-                    throw
-                }
-            }
+            Update-AnfPoolSize -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
             
             # Refresh pool information for throughput calculations
             if ($poolQosType -eq "Manual") {
-                $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction Stop
+                $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
                 $poolMaxThroughput = $anfPool.TotalThroughputMibps
                 Write-Output "Updated pool max throughput: $poolMaxThroughput MiB/s"
             }
@@ -871,7 +1296,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
     
     try {
         # Verify pool size
-        $anfPoolVerify = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction Stop
+        $anfPoolVerify = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $verifyPoolSizeGiB = [math]::Round($anfPoolVerify.Size / 1024 / 1024 / 1024, 0)
         
         if ($poolNeedsResize) {
@@ -884,19 +1309,31 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         } else {
             Write-Output "✓ Pool size unchanged: $verifyPoolSizeGiB GiB (as expected)"
         }
+
+        if ($isFlexibleServiceLevel -and $poolThroughputNeedsUpdate) {
+            $verifyPoolThroughput = Convert-ToWholeThroughputMibps -Value $anfPoolVerify.TotalThroughputMibps -Minimum 0
+            if ($verifyPoolThroughput -eq $newPoolMaxThroughput) {
+                Write-Output "✓ FSL pool throughput verified: $verifyPoolThroughput MiB/s (matches expected $newPoolMaxThroughput MiB/s)"
+            } else {
+                Write-Warning "✗ FSL pool throughput mismatch: Current=$verifyPoolThroughput MiB/s, Expected=$newPoolMaxThroughput MiB/s"
+            }
+        }
         
         # Verify volumes
-        $anfVolumesVerify = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction Stop
+        $anfVolumesVerify = Get-AnfVolumes -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+        $volumesNeedingVerification = @($volumeData | Where-Object { $_.NeedsResize -or ($poolQosType -eq "Manual" -and $_.NewThroughputMibps -ne $_.CurrentThroughputMibps) })
         
-        foreach ($volume in $volumesNeedingResize) {
-            $verifyVolume = $anfVolumesVerify | Where-Object { $_.Name.Split('/')[2] -eq $volume.ShortName }
+        foreach ($volume in $volumesNeedingVerification) {
+            $verifyVolume = $anfVolumesVerify | Where-Object { (Get-AnfVolumeShortName -VolumeObject $_) -eq $volume.ShortName }
             if ($verifyVolume) {
                 $verifyVolumeSizeGiB = [math]::Round($verifyVolume.UsageThreshold / 1024 / 1024 / 1024, 0)
                 
-                if ($verifyVolumeSizeGiB -eq $volume.NewSizeGiB) {
-                    Write-Output "✓ Volume '$($volume.ShortName)' size verified: $verifyVolumeSizeGiB GiB (matches expected $($volume.NewSizeGiB) GiB)"
-                } else {
-                    Write-Warning "✗ Volume '$($volume.ShortName)' size mismatch: Current=$verifyVolumeSizeGiB GiB, Expected=$($volume.NewSizeGiB) GiB"
+                if ($volume.NeedsResize) {
+                    if ($verifyVolumeSizeGiB -eq $volume.NewSizeGiB) {
+                        Write-Output "✓ Volume '$($volume.ShortName)' size verified: $verifyVolumeSizeGiB GiB (matches expected $($volume.NewSizeGiB) GiB)"
+                    } else {
+                        Write-Warning "✗ Volume '$($volume.ShortName)' size mismatch: Current=$verifyVolumeSizeGiB GiB, Expected=$($volume.NewSizeGiB) GiB"
+                    }
                 }
                 
                 # Verify QoS throughput if Manual QoS
@@ -931,7 +1368,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
     
     Write-Output ""
     Write-Output "Capacity and QoS management operations completed"
-} elseif ($testMode -eq "Yes" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsResize -or $volumesNeedingQoSOnly.Count -gt 0)) {
+} elseif ($testMode -eq "Yes" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsResize -or $volumesNeedingQoSOnly.Count -gt 0 -or $poolThroughputNeedsUpdate)) {
     Write-Output ""
     Write-Output "Test mode enabled - no changes were made"
     Write-Output "To execute these changes, set testMode to 'No' or ANF_TestMode automation variable to 'No'"
