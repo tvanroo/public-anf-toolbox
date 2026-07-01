@@ -60,6 +60,7 @@ Assert-Contains -Haystack $scriptText -Needle 'Regular, large, breakthrough, and
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityResizeThreshold` | `99` |' -Message 'Expected README settings table to document actual resize threshold default.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure' -Message 'Expected README to expose Deploy to Azure button.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure Gov' -Message 'Expected README to expose Deploy to Azure Gov button.'
+Assert-Contains -Haystack $readmeText -Needle 'img.shields.io/badge/Deploy%20to-Azure%20Gov' -Message 'Expected Azure Gov deploy badge to be visually distinct from the commercial deploy button.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_LargeVolumeLimitMode` | `Auto` |' -Message 'Expected README settings table to document large volume limit mode.'
 Assert-Contains -Haystack $readmeText -Needle '| Regular volume maximum size | `102400` GiB |' -Message 'Expected README configurable decision table to document regular volume maximum.'
 Assert-Contains -Haystack $readmeText -Needle '| Extra-large cool-access volume maximum size | `7549747` GiB |' -Message 'Expected README configurable decision table to document extra-large cool-access maximum.'

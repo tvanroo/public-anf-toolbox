@@ -13,7 +13,7 @@ By using any content from this repository, you acknowledge that you do so at you
 ## Download Script
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fwip-anf-capacity-autoscale-fsl%2FANF%2520Capacity%2520Autoscale%2Fdeploy%2Fazuredeploy.json)
-[![Deploy to Azure Gov](https://aka.ms/deploytoazurebutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fwip-anf-capacity-autoscale-fsl%2FANF%2520Capacity%2520Autoscale%2Fdeploy%2Fazuredeploy-gov.json)
+[![Deploy to Azure Gov](https://img.shields.io/badge/Deploy%20to-Azure%20Gov-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fwip-anf-capacity-autoscale-fsl%2FANF%2520Capacity%2520Autoscale%2Fdeploy%2Fazuredeploy-gov.json)
 
 [ANF Capacity Autoscale](./ANF-Capacity-Autoscale.ps1)
     - Monitors volume capacity utilization and automatically adjusts volume sizes to prevent running out of space while keeping the pool size optimized for cost efficiency. Analyzes consumption trends and proactively resizes volumes when utilization thresholds are reached.
