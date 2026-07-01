@@ -82,6 +82,13 @@
         "description": "Minutes from deployment time until the first scheduled run starts."
       }
     },
+    "scheduleBaseTimeUtc": {
+      "type": "string",
+      "defaultValue": "[utcNow('u')]",
+      "metadata": {
+        "description": "Deployment timestamp used to calculate the first scheduled run. Leave the default value."
+      }
+    },
     "runbookScriptUri": {
       "type": "string",
       "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
@@ -351,7 +358,7 @@
       ],
       "properties": {
         "description": "Every 4 hours schedule for ANF Capacity Autoscale runbook.",
-        "startTime": "[dateTimeAdd(utcNow('u'), concat('PT', parameters('scheduleStartDelayMinutes'), 'M'))]",
+        "startTime": "[dateTimeAdd(parameters('scheduleBaseTimeUtc'), concat('PT', parameters('scheduleStartDelayMinutes'), 'M'))]",
         "frequency": "Hour",
         "interval": 4,
         "timeZone": "UTC"
