@@ -99,9 +99,11 @@
   },
   "variables": {
     "automationAccountName": "[if(empty(parameters('automationAccountName')), toLower(concat('aa-anf-capacity-', take(uniqueString(resourceGroup().id, deployment().name), 8))), parameters('automationAccountName'))]",
+    "targetAnfAccountResourceId": "[split(parameters('capacityPoolResourceId'), '/capacityPools/')[0]]",
     "runbookName": "ANF-Capacity-Autoscale",
     "scheduleName": "anf-capacity-autoscale-4h",
     "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
+    "roleAssignmentPrincipalGuid": "[guid(variables('targetAnfAccountResourceId'), variables('automationAccountName'))]",
     "anfAdministratorRoleName": "Azure NetApp Files Administrator",
     "anfAdministratorRoleDefinitionId": "f5db7409-a2c6-4d0c-8cf4-412ac01a38df",
     "monitoringReaderRoleDefinitionId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05",
@@ -148,7 +150,8 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "name": "[guid(resourceGroup().id, variables('automationAccountName'), variables('anfAdministratorRoleDefinitionId'))]",
+      "scope": "[variables('targetAnfAccountResourceId')]",
+      "name": "[guid(variables('roleAssignmentPrincipalGuid'), variables('anfAdministratorRoleDefinitionId'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
@@ -161,7 +164,8 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "name": "[guid(resourceGroup().id, variables('automationAccountName'), variables('monitoringReaderRoleDefinitionId'))]",
+      "scope": "[variables('targetAnfAccountResourceId')]",
+      "name": "[guid(variables('roleAssignmentPrincipalGuid'), variables('monitoringReaderRoleDefinitionId'))]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
@@ -381,7 +385,7 @@
     },
     "rbac": {
       "type": "string",
-      "value": "[concat('Assigned ', variables('anfAdministratorRoleName'), ' and Monitoring Reader at the deployment resource group scope. Deploy into the ANF resource group for seamless access.')]"
+      "value": "[concat('Assigned ', variables('anfAdministratorRoleName'), ' and Monitoring Reader at the target ANF account scope: ', variables('targetAnfAccountResourceId'))]"
     }
   }
 }
