@@ -52,10 +52,7 @@ Azure Automation Account Setup Requirements:
 
    Required target settings:
    - ANF_TenantId: Azure Tenant ID (string)
-   - ANF_SubscriptionId: Azure Subscription ID (string)
-   - ANF_ResourceGroupName: Resource Group name (string) - REQUIRED
-   - ANF_AccountName: ANF Account name (string) - REQUIRED  
-   - ANF_PoolName: ANF Pool name (string) - REQUIRED
+   - ANF_CapacityPoolResourceId: Capacity pool Resource ID (string) - REQUIRED
 
    Capacity decision settings:
    - ANF_CapacityResizeThreshold: Resize threshold percent (int, default: 99)
@@ -161,14 +158,50 @@ function Get-AnfSetting {
     return $value
 }
 
+function Resolve-AnfCapacityPoolResourceId {
+    param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceId)
+
+    $normalizedResourceId = "$CapacityPoolResourceId".Trim().TrimEnd("/")
+    $pattern = '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.NetApp/netAppAccounts/([^/]+)/capacityPools/([^/]+)$'
+    if ($normalizedResourceId -notmatch $pattern) {
+        throw "ANF_CapacityPoolResourceId must be a capacity pool Resource ID in this format: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
+    }
+
+    return [PSCustomObject]@{
+        CapacityPoolResourceId = $normalizedResourceId
+        SubscriptionId = $Matches[1]
+        ResourceGroupName = $Matches[2]
+        AccountName = $Matches[3]
+        PoolName = $Matches[4]
+    }
+}
+
 # User Editable Variables (can be set as Automation Account variables):
     # Get variables from Automation Account, Cloud Shell environment variables, or defaults
     $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    $subscriptionId = Get-AnfSetting -Name "ANF_SubscriptionId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-    $resourceGroupName = Get-AnfSetting -Name "ANF_ResourceGroupName" -Default "example-rg"
-    $anfAccountName = Get-AnfSetting -Name "ANF_AccountName" -Default "example-anf-acct"
-    
-    $anfPoolName = Get-AnfSetting -Name "ANF_PoolName" -Default "example-anf-pool"
+    $capacityPoolResourceId = Get-AnfSetting -Name "ANF_CapacityPoolResourceId"
+    $subscriptionId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    $resourceGroupName = "example-rg"
+    $anfAccountName = "example-anf-acct"
+    $anfPoolName = "example-anf-pool"
+
+    if ($capacityPoolResourceId) {
+        $anfTarget = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $capacityPoolResourceId
+        $subscriptionId = $anfTarget.SubscriptionId
+        $resourceGroupName = $anfTarget.ResourceGroupName
+        $anfAccountName = $anfTarget.AccountName
+        $anfPoolName = $anfTarget.PoolName
+        $capacityPoolResourceId = $anfTarget.CapacityPoolResourceId
+    } else {
+        # Legacy fallback for manual testing with older environment variables.
+        $subscriptionId = Get-AnfSetting -Name "ANF_SubscriptionId" -Default $subscriptionId
+        $resourceGroupName = Get-AnfSetting -Name "ANF_ResourceGroupName" -Default $resourceGroupName
+        $anfAccountName = Get-AnfSetting -Name "ANF_AccountName" -Default $anfAccountName
+        $anfPoolName = Get-AnfSetting -Name "ANF_PoolName" -Default $anfPoolName
+        if ($subscriptionId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -and $resourceGroupName -ne "example-rg" -and $anfAccountName -ne "example-anf-acct" -and $anfPoolName -ne "example-anf-pool") {
+            $capacityPoolResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName"
+        }
+    }
     
     # Capacity Management Settings (can be overridden with Automation Variables)
     $capacityResizeThreshold = Get-AnfSetting -Name "ANF_CapacityResizeThreshold"
@@ -217,6 +250,7 @@ function Get-AnfSetting {
 Write-Output "=== ANF Capacity Autoscale Configuration ==="
 Write-Output "Execution Mode: $(if ($runningInAutomation) { 'Azure Automation Account' } else { 'Local/Manual Execution' })"
 Write-Output "Tenant ID: $tenantId"
+Write-Output "Capacity Pool Resource ID: $capacityPoolResourceId"
 Write-Output "Subscription ID: $subscriptionId"
 Write-Output "Resource Group: $resourceGroupName"
 Write-Output "ANF Account: $anfAccountName" 
@@ -242,17 +276,9 @@ if ($testMode -eq "Yes") {
 }
 
 # Validate required variables
-if (-not $resourceGroupName -or $resourceGroupName -eq "example-rg") {
-    Write-Error "ANF_ResourceGroupName must be set before running this script"
-    throw "Missing required variable: ANF_ResourceGroupName"
-}
-if (-not $anfAccountName -or $anfAccountName -eq "example-anf-acct") {
-    Write-Error "ANF_AccountName must be set before running this script"
-    throw "Missing required variable: ANF_AccountName"
-}
-if (-not $anfPoolName -or $anfPoolName -eq "example-anf-pool") {
-    Write-Error "ANF_PoolName must be set before running this script"
-    throw "Missing required variable: ANF_PoolName"
+if (-not $capacityPoolResourceId) {
+    Write-Error "ANF_CapacityPoolResourceId must be set before running this script"
+    throw "Missing required variable: ANF_CapacityPoolResourceId"
 }
 
 $anfApiVersion = "2026-04-01"

@@ -9,16 +9,10 @@
         "description": "Optional Automation Account name. Leave blank to generate one."
       }
     },
-    "anfAccountName": {
+    "capacityPoolResourceId": {
       "type": "string",
       "metadata": {
-        "description": "Target Azure NetApp Files account name."
-      }
-    },
-    "anfPoolName": {
-      "type": "string",
-      "metadata": {
-        "description": "Target Azure NetApp Files capacity pool name."
+        "description": "Full Resource ID of the target Azure NetApp Files capacity pool. Example: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
       }
     },
     "testMode": {
@@ -99,6 +93,7 @@
   "variables": {
     "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json",
     "editableTestModeVariable": "ANF_TestMode",
+    "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId",
     "editableLargeVolumeMaximumSizeVariable": "ANF_LargeVolumeMaximumSizeGiB"
   },
   "resources": [
@@ -116,11 +111,8 @@
           "automationAccountName": {
             "value": "[parameters('automationAccountName')]"
           },
-          "anfAccountName": {
-            "value": "[parameters('anfAccountName')]"
-          },
-          "anfPoolName": {
-            "value": "[parameters('anfPoolName')]"
+          "capacityPoolResourceId": {
+            "value": "[parameters('capacityPoolResourceId')]"
           },
           "testMode": {
             "value": "[parameters('testMode')]"
@@ -157,6 +149,10 @@
     "testModeVariable": {
       "type": "string",
       "value": "[variables('editableTestModeVariable')]"
+    },
+    "capacityPoolResourceIdVariable": {
+      "type": "string",
+      "value": "[variables('editableCapacityPoolResourceIdVariable')]"
     },
     "largeVolumeMaximumSizeVariable": {
       "type": "string",

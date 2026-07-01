@@ -9,16 +9,10 @@
         "description": "Optional Automation Account name. Leave blank to generate one."
       }
     },
-    "anfAccountName": {
+    "capacityPoolResourceId": {
       "type": "string",
       "metadata": {
-        "description": "Target Azure NetApp Files account name."
-      }
-    },
-    "anfPoolName": {
-      "type": "string",
-      "metadata": {
-        "description": "Target Azure NetApp Files capacity pool name."
+        "description": "Full Resource ID of the target Azure NetApp Files capacity pool. Example: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
       }
     },
     "testMode": {
@@ -212,53 +206,14 @@
     {
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_SubscriptionId')]",
+      "name": "[concat(variables('automationAccountName'), '/ANF_CapacityPoolResourceId')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
         "isEncrypted": false,
-        "description": "Target Azure subscription ID.",
-        "value": "[concat('\"', subscription().subscriptionId, '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_ResourceGroupName')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Target ANF resource group name. Deploy this template into the ANF resource group for automatic RBAC.",
-        "value": "[concat('\"', resourceGroup().name, '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_AccountName')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Target ANF account name.",
-        "value": "[concat('\"', parameters('anfAccountName'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_PoolName')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Target ANF capacity pool name.",
-        "value": "[concat('\"', parameters('anfPoolName'), '\"')]"
+        "description": "Full Resource ID of the target Azure NetApp Files capacity pool.",
+        "value": "[concat('\"', parameters('capacityPoolResourceId'), '\"')]"
       }
     },
     {
@@ -432,6 +387,10 @@
     "testModeVariable": {
       "type": "string",
       "value": "ANF_TestMode"
+    },
+    "capacityPoolResourceIdVariable": {
+      "type": "string",
+      "value": "ANF_CapacityPoolResourceId"
     },
     "largeVolumeMaximumSizeVariable": {
       "type": "string",

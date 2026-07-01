@@ -20,7 +20,7 @@ By using any content from this repository, you acknowledge that you do so at you
 
 The deployment buttons create an Azure Automation Account, import the runbook, create the editable `ANF_*` Automation variables, assign the managed identity `Azure NetApp Files Administrator` and `Monitoring Reader` at the deployment resource group scope, and schedule the runbook every 4 hours. Deploy the template into the resource group that contains the ANF account and capacity pool for the automatic RBAC assignment to line up with the target resources.
 
-The standard ARM deployment experience provides subscription and resource group pickers, but it does not dynamically populate ANF account or capacity pool dropdowns from the selected tenant. Enter the ANF account and pool names as deployment parameters.
+The standard ARM deployment experience still provides subscription and resource group pickers for the Automation Account deployment scope. For the ANF target, copy the capacity pool Resource ID from Azure and paste it into `capacityPoolResourceId`; the runbook derives the subscription, resource group, ANF account, and pool names from that single value.
 
 ## Flexible Service Level behavior
 
@@ -44,11 +44,8 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 
 | Setting | Default | Used for |
 | --- | --- | --- |
-| `ANF_SubscriptionId` | placeholder | Azure subscription selection. |
 | `ANF_TenantId` | placeholder | Optional tenant selection. |
-| `ANF_ResourceGroupName` | required | Target ANF resource group. |
-| `ANF_AccountName` | required | Target ANF account. |
-| `ANF_PoolName` | required | Target capacity pool. |
+| `ANF_CapacityPoolResourceId` | required | Target capacity pool Resource ID. The script derives subscription, resource group, ANF account, and pool from this value. |
 | `ANF_TestMode` | `Yes` | `Yes` previews only; `No` applies changes. |
 | `ANF_CapacityResizeThreshold` | `99` | Expands a volume when max observed utilization is at or above this percent. |
 | `ANF_MinimumFreeSpaceGiB` | `256` | Expands a volume when free space is at or below this value; also sizes expansion/contraction targets. |
@@ -90,5 +87,5 @@ These values are currently fixed in the script rather than exposed as inputs.
 
 - Both autoscale scripts default to test mode. `ANF_TestMode` must be set to `No` before pool, volume, or throughput changes are applied.
 - If `ANF_TestMode` is missing in Azure Automation, the scripts now fall back to `Yes` instead of live mode.
-- Local defaults are placeholders. Set `ANF_ResourceGroupName`, `ANF_AccountName`, and `ANF_PoolName` before running against real ANF resources.
+- Local defaults are placeholders. Set `ANF_CapacityPoolResourceId` before running against real ANF resources.
 - Re-runs recalculate current capacity and throughput state before acting, so delta runs only apply changes that are still needed.
