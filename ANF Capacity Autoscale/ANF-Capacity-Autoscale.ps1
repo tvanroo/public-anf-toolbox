@@ -45,38 +45,51 @@ Azure Automation Account Setup Requirements:
    - AND: Microsoft.NetApp/netAppAccounts/capacityPools/volumes/read,write
    - Monitor Reader role for metrics access: Microsoft.Insights/metrics/read
 
-3. RECOMMENDED AUTOMATION VARIABLES (optional, will use defaults if not set):
+3. SETTINGS
+   Settings can be supplied as Azure Automation variables or as process environment variables
+   with the same names for Cloud Shell/local testing. Azure Automation variables are used first
+   when running in an Automation Account; otherwise environment variables are used before defaults.
+
+   Required target settings:
    - ANF_TenantId: Azure Tenant ID (string)
+   - ANF_SubscriptionId: Azure Subscription ID (string)
    - ANF_ResourceGroupName: Resource Group name (string) - REQUIRED
    - ANF_AccountName: ANF Account name (string) - REQUIRED  
    - ANF_PoolName: ANF Pool name (string) - REQUIRED
-   - ANF_CapacityResizeThreshold: Resize threshold % (int, default: 95)
-   - ANF_MinimumVolumeGrowthPercent: Min growth % (int, default: 20)
-   - ANF_MaximumVolumeGrowthPercent: Max growth % (int, default: 100)
-   - ANF_MinimumFreeSpaceGiB: Min free space in GiB (int, default: 10)
+
+   Capacity decision settings:
+   - ANF_CapacityResizeThreshold: Resize threshold percent (int, default: 99)
+   - ANF_MinimumVolumeGrowthPercent: Minimum growth percent (int, default: 0)
+   - ANF_MaximumVolumeGrowthPercent: Maximum growth percent (int, default: 10000000)
+   - ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)
    - ANF_CapacityLookBackHours: Metrics lookback hours (int, default: 24)
    - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
+
+   Throughput decision settings:
    - ANF_VolumeMinThroughputMap: JSON string mapping volume names to minimum throughput
      Example: '{"vol1":10,"vol2":15,"vol3":5}' - sets minimum MiB/s per volume
-   - ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 1000)
+   - ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 68)
      Overrides the calculated pool MiB/s per TiB ratio for classic manual QoS throughput calculation
    - ANF_MinimumPoolThroughputMibps: Minimum Flexible service level pool throughput (int, default: 128)
      Used only for Flexible service level pools, where capacity and throughput are managed independently
 
-6. VOLUME EXPANSION/CONTRACTION LOGIC:
+4. VOLUME EXPANSION/CONTRACTION LOGIC:
    - Expands volume if utilization % OR absolute GiB threshold is exceeded
    - Contracts volume if both thresholds have sufficient headroom (15% buffer)
    - Pool automatically resizes in TiB increments for maximum cost efficiency
    - Pool expands when volumes won't fit, contracts when full TiB can be freed
    - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
    - Flexible service level throughput is allocated from current pool throughput and is not derived from pool capacity
+   - Minimum volume size is hard-coded at 50 GiB; maximum volume size is hard-coded at 102400 GiB.
+   - Volume contraction uses a hard-coded 15 percentage point utilization buffer and 3x minimum-free-space gate.
+   - Missing capacity metric data is treated as 0 GiB consumed.
 
-4. RECOMMENDED SCHEDULE:
+5. RECOMMENDED SCHEDULE:
    - Run every 4-6 hours for proactive management
    - Avoid peak business hours for volume resizing operations
    - Consider maintenance windows for pool expansions
 
-5. MONITORING AND ALERTING:
+6. MONITORING AND ALERTING:
    - Configure runbook failure alerts
    - Monitor capacity resize activities via Activity Log
    - Set up custom metrics for capacity utilization trending

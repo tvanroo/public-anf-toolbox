@@ -4,7 +4,9 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Capacity-Autoscale.ps1'
+$readmePath = Join-Path $repoRoot 'ANF Capacity Autoscale/README.md'
 $scriptText = Get-Content -LiteralPath $scriptPath -Raw
+$readmeText = Get-Content -LiteralPath $readmePath -Raw
 
 function Assert-Contains {
     param(
@@ -40,5 +42,14 @@ Assert-Contains -Haystack $scriptText -Needle '$propertyCandidates = @("customTh
 Assert-Contains -Haystack $scriptText -Needle 'ServiceLevel = $resolvedServiceLevel' -Message 'Expected service level to be normalized onto the pool object.'
 Assert-Contains -Haystack $scriptText -Needle '$isFlexibleServiceLevel = Test-AnfFlexibleServiceLevel' -Message 'Expected explicit Flexible service level detection.'
 Assert-Contains -Haystack $scriptText -Needle 'Flexible service level: capacity and throughput are managed independently' -Message 'Expected FSL branch to keep capacity and throughput planning separate.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_CapacityResizeThreshold: Resize threshold percent (int, default: 99)' -Message 'Expected script header to document actual capacity resize threshold default.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_MinimumVolumeGrowthPercent: Minimum growth percent (int, default: 0)' -Message 'Expected script header to document actual minimum volume growth default.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_MaximumVolumeGrowthPercent: Maximum growth percent (int, default: 10000000)' -Message 'Expected script header to document actual maximum volume growth default.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)' -Message 'Expected script header to document actual minimum free space default.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 68)' -Message 'Expected script header to document actual classic manual QoS throughput cap default.'
+Assert-Contains -Haystack $scriptText -Needle 'Minimum volume size is hard-coded at 50 GiB; maximum volume size is hard-coded at 102400 GiB.' -Message 'Expected script header to document hard-coded volume size bounds.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityResizeThreshold` | `99` |' -Message 'Expected README settings table to document actual resize threshold default.'
+Assert-Contains -Haystack $readmeText -Needle '| Minimum volume size | `50` GiB |' -Message 'Expected README hard-coded decision table to document minimum volume size.'
+Assert-Contains -Haystack $readmeText -Needle '| Missing capacity metric data | `0` consumed |' -Message 'Expected README hard-coded decision table to document missing metric fallback.'
 
 Write-Output 'ANF-Capacity-Autoscale static checks passed.'
