@@ -99,11 +99,15 @@
   },
   "variables": {
     "automationAccountName": "[if(empty(parameters('automationAccountName')), toLower(concat('aa-anf-capacity-', take(uniqueString(resourceGroup().id, deployment().name), 8))), parameters('automationAccountName'))]",
-    "targetAnfAccountResourceId": "[split(parameters('capacityPoolResourceId'), '/capacityPools/')[0]]",
+    "capacityPoolResourceIdParts": "[split(parameters('capacityPoolResourceId'), '/')]",
+    "targetAnfSubscriptionId": "[variables('capacityPoolResourceIdParts')[2]]",
+    "targetAnfResourceGroupName": "[variables('capacityPoolResourceIdParts')[4]]",
+    "targetAnfAccountName": "[variables('capacityPoolResourceIdParts')[8]]",
+    "targetAnfAccountResourceId": "[format('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.NetApp/netAppAccounts/{2}', variables('targetAnfSubscriptionId'), variables('targetAnfResourceGroupName'), variables('targetAnfAccountName'))]",
     "runbookName": "ANF-Capacity-Autoscale",
     "scheduleName": "anf-capacity-autoscale-4h",
     "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
-    "roleAssignmentPrincipalGuid": "[guid(variables('targetAnfAccountResourceId'), variables('automationAccountName'))]",
+    "rbacDeploymentName": "[concat('anf-capacity-autoscale-rbac-', take(uniqueString(variables('targetAnfAccountResourceId'), variables('automationAccountName')), 8))]",
     "anfAdministratorRoleName": "Azure NetApp Files Administrator",
     "anfAdministratorRoleDefinitionId": "f5db7409-a2c6-4d0c-8cf4-412ac01a38df",
     "monitoringReaderRoleDefinitionId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05",
@@ -148,31 +152,81 @@
       }
     },
     {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[variables('targetAnfAccountResourceId')]",
-      "name": "[guid(variables('roleAssignmentPrincipalGuid'), variables('anfAdministratorRoleDefinitionId'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "[variables('rbacDeploymentName')]",
+      "subscriptionId": "[variables('targetAnfSubscriptionId')]",
+      "resourceGroup": "[variables('targetAnfResourceGroupName')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
       ],
       "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('anfAdministratorRoleDefinitionId'))]",
-        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]",
-        "principalType": "ServicePrincipal"
-      }
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[variables('targetAnfAccountResourceId')]",
-      "name": "[guid(variables('roleAssignmentPrincipalGuid'), variables('monitoringReaderRoleDefinitionId'))]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringReaderRoleDefinitionId'))]",
-        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]",
-        "principalType": "ServicePrincipal"
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "targetAnfAccountName": {
+              "type": "string"
+            },
+            "targetAnfAccountResourceId": {
+              "type": "string"
+            },
+            "automationPrincipalId": {
+              "type": "string"
+            },
+            "anfAdministratorRoleDefinitionId": {
+              "type": "string"
+            },
+            "monitoringReaderRoleDefinitionId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[format('Microsoft.NetApp/netAppAccounts/{0}', parameters('targetAnfAccountName'))]",
+              "name": "[guid(parameters('targetAnfAccountResourceId'), parameters('automationPrincipalId'), parameters('anfAdministratorRoleDefinitionId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('anfAdministratorRoleDefinitionId'))]",
+                "principalId": "[parameters('automationPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[format('Microsoft.NetApp/netAppAccounts/{0}', parameters('targetAnfAccountName'))]",
+              "name": "[guid(parameters('targetAnfAccountResourceId'), parameters('automationPrincipalId'), parameters('monitoringReaderRoleDefinitionId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('monitoringReaderRoleDefinitionId'))]",
+                "principalId": "[parameters('automationPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "targetAnfAccountName": {
+            "value": "[variables('targetAnfAccountName')]"
+          },
+          "targetAnfAccountResourceId": {
+            "value": "[variables('targetAnfAccountResourceId')]"
+          },
+          "automationPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
+          },
+          "anfAdministratorRoleDefinitionId": {
+            "value": "[variables('anfAdministratorRoleDefinitionId')]"
+          },
+          "monitoringReaderRoleDefinitionId": {
+            "value": "[variables('monitoringReaderRoleDefinitionId')]"
+          }
+        }
       }
     },
     {

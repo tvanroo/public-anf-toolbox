@@ -514,14 +514,34 @@ function Invoke-AnfArmJson {
     return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
 }
 
+function New-AnfResourceId {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter()][string]$PoolName,
+        [Parameter()][string]$VolumeName
+    )
+
+    $resourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName"
+    if ($PoolName) {
+        $resourceId = "$resourceId/capacityPools/$PoolName"
+    }
+    if ($VolumeName) {
+        $resourceId = "$resourceId/volumes/$VolumeName"
+    }
+
+    return $resourceId
+}
+
 function Get-AnfAccount {
     param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName
     )
 
-    $context = Get-AzContext -ErrorAction Stop
-    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName"
+    $resourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName
     $account = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
     if ($account -and $account.error) {
         throw "ANF account REST API returned error for $ResourceGroupName/$AccountName. code='$($account.error.code)' message='$($account.error.message)'"
@@ -644,13 +664,13 @@ function Convert-AnfRestPool {
 
 function Get-AnfPool {
     param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName,
         [Parameter(Mandatory=$true)][string]$PoolName
     )
 
-    $context = Get-AzContext -ErrorAction Stop
-    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName"
+    $resourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName
     $poolCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
     if ($poolCandidate -and $poolCandidate.error) {
         throw "Capacity pool REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($poolCandidate.error.code)' message='$($poolCandidate.error.message)'"
@@ -705,13 +725,13 @@ function Convert-AnfRestVolume {
 
 function Get-AnfVolumes {
     param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName,
         [Parameter(Mandatory=$true)][string]$PoolName
     )
 
-    $context = Get-AzContext -ErrorAction Stop
-    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes"
+    $resourceId = "$(New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName)/volumes"
     $volumesCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
     if ($volumesCandidate -and $volumesCandidate.error) {
         throw "Volume list REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($volumesCandidate.error.code)' message='$($volumesCandidate.error.message)'"
@@ -729,14 +749,14 @@ function Get-AnfVolumes {
 
 function Get-AnfVolume {
     param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName,
         [Parameter(Mandatory=$true)][string]$PoolName,
         [Parameter(Mandatory=$true)][string]$VolumeName
     )
 
-    $context = Get-AzContext -ErrorAction Stop
-    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName/volumes/$VolumeName"
+    $resourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -VolumeName $VolumeName
     $volume = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
     if ($volume -and $volume.error) {
         throw "Volume REST API returned error for $ResourceGroupName/$AccountName/$PoolName/$VolumeName. code='$($volume.error.code)' message='$($volume.error.message)'"
@@ -747,6 +767,7 @@ function Get-AnfVolume {
 
 function Update-AnfPoolSize {
     param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName,
         [Parameter(Mandatory=$true)][string]$PoolName,
@@ -754,8 +775,7 @@ function Update-AnfPoolSize {
         [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
     )
 
-    $context = Get-AzContext -ErrorAction Stop
-    $poolResourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName"
+    $poolResourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName
     $poolSizeApiVersion = if ($IsFlexibleServiceLevel) { "2024-07-01-preview" } else { $anfApiVersion }
     $body = @{
         properties = @{
@@ -951,7 +971,7 @@ try {
 # Get the Azure NetApp Files account details
 Write-Output "Connecting to ANF Account: $anfAccountName..."
 try {
-    $anfAccount = Get-AnfAccount -ResourceGroupName $resourceGroupName -AccountName $anfAccountName
+    $anfAccount = Get-AnfAccount -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName
     Write-Output "Successfully connected to ANF Account: $anfAccountName"
 } catch {
     Write-Error "Failed to connect to ANF Account: $anfAccountName. $_"
@@ -961,7 +981,7 @@ try {
 # Get the Azure NetApp Files capacity pool details
 Write-Output "Connecting to ANF Pool: $anfPoolName..."
 try {
-    $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+    $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
     Write-Output "Successfully connected to ANF Pool: $anfPoolName"
 } catch {
     Write-Error "Failed to connect to ANF Pool: $anfPoolName. $_"
@@ -1007,7 +1027,7 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
         
         Write-Output "Attempting to retrieve volumes using ANF REST API (timeout: 300s)..."
         $startTime = Get-Date
-        $anfVolumes = Get-AnfVolumes -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+        $anfVolumes = Get-AnfVolumes -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $elapsed = (Get-Date) - $startTime
         
         if ($anfVolumes) {
@@ -1414,7 +1434,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         Write-Output "Updating FSL pool throughput from $poolMaxThroughput MiB/s to $newPoolMaxThroughput MiB/s..."
         try {
             Update-AnfFslPoolThroughputMibps -PoolResourceId $anfPool.Id -TargetThroughputMibps $newPoolMaxThroughput
-            $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+            $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
             $poolMaxThroughput = $anfPool.TotalThroughputMibps
             Write-Output "FSL pool throughput updated successfully. Current pool throughput: $poolMaxThroughput MiB/s"
         } catch {
@@ -1429,11 +1449,11 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         Write-Output "Resizing pool from $currentPoolSizeGiB GiB to $optimalPoolSizeGiB GiB ($poolAction)..."
         try {
             $newPoolSizeBytes = $optimalPoolSizeGiB * 1024 * 1024 * 1024
-            Update-AnfPoolSize -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
+            Update-AnfPoolSize -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
             
             # Refresh pool information for throughput calculations
             if ($poolQosType -eq "Manual") {
-                $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+                $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
                 $poolMaxThroughput = $anfPool.TotalThroughputMibps
                 Write-Output "Updated pool max throughput: $poolMaxThroughput MiB/s"
             }
@@ -1482,11 +1502,11 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         Write-Output "Resizing pool from $currentPoolSizeGiB GiB to $optimalPoolSizeGiB GiB ($poolAction)..."
         try {
             $newPoolSizeBytes = $optimalPoolSizeGiB * 1024 * 1024 * 1024
-            Update-AnfPoolSize -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
+            Update-AnfPoolSize -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetSizeBytes $newPoolSizeBytes -IsFlexibleServiceLevel $isFlexibleServiceLevel
             
             # Refresh pool information for throughput calculations
             if ($poolQosType -eq "Manual") {
-                $anfPool = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+                $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
                 $poolMaxThroughput = $anfPool.TotalThroughputMibps
                 Write-Output "Updated pool max throughput: $poolMaxThroughput MiB/s"
             }
@@ -1502,7 +1522,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
     
     try {
         # Verify pool size
-        $anfPoolVerify = Get-AnfPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+        $anfPoolVerify = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $verifyPoolSizeGiB = [math]::Round($anfPoolVerify.Size / 1024 / 1024 / 1024, 0)
         
         if ($poolNeedsResize) {
@@ -1526,7 +1546,7 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         }
         
         # Verify volumes
-        $anfVolumesVerify = Get-AnfVolumes -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+        $anfVolumesVerify = Get-AnfVolumes -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $volumesNeedingVerification = @($volumeData | Where-Object { $_.NeedsResize -or ($poolQosType -eq "Manual" -and $_.NewThroughputMibps -ne $_.CurrentThroughputMibps) })
         
         foreach ($volume in $volumesNeedingVerification) {
