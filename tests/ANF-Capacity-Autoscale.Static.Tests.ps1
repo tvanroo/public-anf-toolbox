@@ -7,10 +7,12 @@ $scriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Capacity-Autoscale
 $readmePath = Join-Path $repoRoot 'ANF Capacity Autoscale/README.md'
 $deployPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy.json'
 $deployGovPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy-gov.json'
+$deployGovBadgePath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/deploytoazuregov.svg'
 $scriptText = Get-Content -LiteralPath $scriptPath -Raw
 $readmeText = Get-Content -LiteralPath $readmePath -Raw
 $deployText = if (Test-Path -LiteralPath $deployPath) { Get-Content -LiteralPath $deployPath -Raw } else { "" }
 $deployGovText = if (Test-Path -LiteralPath $deployGovPath) { Get-Content -LiteralPath $deployGovPath -Raw } else { "" }
+$deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Content -LiteralPath $deployGovBadgePath -Raw } else { "" }
 
 function Assert-Contains {
     param(
@@ -20,6 +22,18 @@ function Assert-Contains {
     )
 
     if (-not $Haystack.Contains($Needle)) {
+        throw $Message
+    }
+}
+
+function Assert-NotContains {
+    param(
+        [Parameter(Mandatory=$true)][string]$Haystack,
+        [Parameter(Mandatory=$true)][string]$Needle,
+        [Parameter(Mandatory=$true)][string]$Message
+    )
+
+    if ($Haystack.Contains($Needle)) {
         throw $Message
     }
 }
@@ -60,7 +74,10 @@ Assert-Contains -Haystack $scriptText -Needle 'Regular, large, breakthrough, and
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityResizeThreshold` | `99` |' -Message 'Expected README settings table to document actual resize threshold default.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure' -Message 'Expected README to expose Deploy to Azure button.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure Gov' -Message 'Expected README to expose Deploy to Azure Gov button.'
-Assert-Contains -Haystack $readmeText -Needle 'img.shields.io/badge/Deploy%20to-Azure%20Gov' -Message 'Expected Azure Gov deploy badge to be visually distinct from the commercial deploy button.'
+Assert-Contains -Haystack $readmeText -Needle 'deploy/deploytoazuregov.svg' -Message 'Expected Azure Gov deploy badge to use the local Azure-style Gov badge.'
+Assert-NotContains -Haystack $readmeText -Needle 'img.shields.io/badge/Deploy%20to-Azure%20Gov' -Message 'Expected README not to use the generic shields.io Azure Gov badge.'
+Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG to label the button as Deploy to Azure Gov.'
+Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 'Expected local Azure Gov badge SVG to use the standard Azure button color.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_LargeVolumeLimitMode` | `Auto` |' -Message 'Expected README settings table to document large volume limit mode.'
 Assert-Contains -Haystack $readmeText -Needle '| Regular volume maximum size | `102400` GiB |' -Message 'Expected README configurable decision table to document regular volume maximum.'
 Assert-Contains -Haystack $readmeText -Needle '| Extra-large cool-access volume maximum size | `7549747` GiB |' -Message 'Expected README configurable decision table to document extra-large cool-access maximum.'
