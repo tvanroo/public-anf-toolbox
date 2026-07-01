@@ -1,0 +1,677 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Automation Account name. Leave blank to generate one."
+      }
+    },
+    "anfAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "Target Azure NetApp Files account name."
+      }
+    },
+    "anfPoolName": {
+      "type": "string",
+      "metadata": {
+        "description": "Target Azure NetApp Files capacity pool name."
+      }
+    },
+    "testMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = preview only. No = apply live capacity and throughput changes."
+      }
+    },
+    "capacityResizeThreshold": {
+      "type": "int",
+      "defaultValue": 99,
+      "minValue": 1,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Expand a volume when max observed utilization is at or above this percent."
+      }
+    },
+    "minimumFreeSpaceGiB": {
+      "type": "int",
+      "defaultValue": 256,
+      "minValue": 1,
+      "metadata": {
+        "description": "Expand a volume when free space is at or below this value. Also used in target size calculations."
+      }
+    },
+    "minimumVolumeGrowthPercent": {
+      "type": "int",
+      "defaultValue": 0,
+      "minValue": 0,
+      "metadata": {
+        "description": "Minimum percent growth applied when expanding a volume."
+      }
+    },
+    "maximumVolumeGrowthPercent": {
+      "type": "int",
+      "defaultValue": 10000000,
+      "minValue": 1,
+      "metadata": {
+        "description": "Maximum percent growth allowed in one run."
+      }
+    },
+    "capacityLookBackHours": {
+      "type": "int",
+      "defaultValue": 24,
+      "minValue": 1,
+      "metadata": {
+        "description": "Lookback window for the VolumeLogicalSize metric."
+      }
+    },
+    "volumeMinThroughputMap": {
+      "type": "string",
+      "defaultValue": "{}",
+      "metadata": {
+        "description": "JSON map of volume name to minimum MiB/s, for example {\"vol1\":10,\"vol2\":15}. Leave {} if not needed."
+      }
+    },
+    "maxThroughputPerTiB": {
+      "type": "int",
+      "defaultValue": 68,
+      "minValue": 1,
+      "metadata": {
+        "description": "Classic manual QoS cap for calculated throughput per TiB. Flexible service level does not derive throughput from pool size."
+      }
+    },
+    "minimumPoolThroughputMibps": {
+      "type": "int",
+      "defaultValue": 128,
+      "minValue": 1,
+      "metadata": {
+        "description": "Flexible service level pool throughput floor in MiB/s."
+      }
+    },
+    "largeVolumeLimitMode": {
+      "type": "string",
+      "defaultValue": "Auto",
+      "allowedValues": [
+        "Auto",
+        "Large",
+        "Breakthrough",
+        "ExtraLargeCoolAccess"
+      ],
+      "metadata": {
+        "description": "Auto detects existing large-volume variants from Azure properties. Explicit modes override the large-volume profile only for volumes already marked as large."
+      }
+    },
+    "regularVolumeMinimumSizeGiB": {
+      "type": "int",
+      "defaultValue": 50,
+      "minValue": 1,
+      "metadata": {
+        "description": "Regular volume minimum size guard in GiB."
+      }
+    },
+    "regularVolumeMaximumSizeGiB": {
+      "type": "int",
+      "defaultValue": 102400,
+      "minValue": 50,
+      "metadata": {
+        "description": "Regular volume maximum size guard in GiB."
+      }
+    },
+    "largeVolumeMinimumSizeGiB": {
+      "type": "int",
+      "defaultValue": 51200,
+      "minValue": 1,
+      "metadata": {
+        "description": "Default large volume minimum size guard in GiB."
+      }
+    },
+    "largeVolumeMaximumSizeGiB": {
+      "type": "int",
+      "defaultValue": 1048576,
+      "minValue": 51200,
+      "metadata": {
+        "description": "Default large volume maximum size guard in GiB."
+      }
+    },
+    "breakthroughLargeVolumeMinimumSizeGiB": {
+      "type": "int",
+      "defaultValue": 2400,
+      "minValue": 1,
+      "metadata": {
+        "description": "Breakthrough large volume minimum size guard in GiB."
+      }
+    },
+    "breakthroughLargeVolumeMaximumSizeGiB": {
+      "type": "int",
+      "defaultValue": 2457600,
+      "minValue": 2400,
+      "metadata": {
+        "description": "Breakthrough large volume maximum size guard in GiB."
+      }
+    },
+    "extraLargeCoolAccessVolumeMinimumSizeGiB": {
+      "type": "int",
+      "defaultValue": 2400,
+      "minValue": 1,
+      "metadata": {
+        "description": "Extra-large cool-access volume minimum size guard in GiB."
+      }
+    },
+    "extraLargeCoolAccessVolumeMaximumSizeGiB": {
+      "type": "int",
+      "defaultValue": 7549747,
+      "minValue": 2400,
+      "metadata": {
+        "description": "Extra-large cool-access volume maximum size guard in GiB."
+      }
+    },
+    "scheduleTimeZone": {
+      "type": "string",
+      "defaultValue": "UTC",
+      "metadata": {
+        "description": "Time zone used by the recurring run schedule."
+      }
+    },
+    "scheduleStartTimeUtc": {
+      "type": "string",
+      "defaultValue": "[dateTimeAdd(utcNow('u'), 'PT20M')]",
+      "metadata": {
+        "description": "UTC start time for the first run. Default is deployment time + 20 minutes."
+      }
+    },
+    "runbookScriptUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
+      "metadata": {
+        "description": "Source URL of the runbook script file to import and publish."
+      }
+    }
+  },
+  "variables": {
+    "automationAccountName": "[if(empty(parameters('automationAccountName')), toLower(concat('aa-anf-capacity-', take(uniqueString(resourceGroup().id, deployment().name), 8))), parameters('automationAccountName'))]",
+    "runbookName": "ANF-Capacity-Autoscale",
+    "scheduleName": "anf-capacity-autoscale-4h",
+    "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
+    "anfAdministratorRoleName": "Azure NetApp Files Administrator",
+    "anfAdministratorRoleDefinitionId": "f5db7409-a2c6-4d0c-8cf4-412ac01a38df",
+    "monitoringReaderRoleDefinitionId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05",
+    "standardTags": {
+      "managed-by": "public-anf-toolbox",
+      "solution": "anf-capacity-autoscale",
+      "repository": "https://github.com/tvanroo/public-anf-toolbox",
+      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale",
+      "script": "ANF-Capacity-Autoscale.ps1",
+      "status": "WIP"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('automationAccountName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": "[variables('standardTags')]",
+      "properties": {
+        "sku": {
+          "name": "Basic"
+        },
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.Accounts')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/Az.Accounts"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.NetAppFiles')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Accounts')]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/Az.NetAppFiles"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.Monitor')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Accounts')]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/Az.Monitor"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('automationAccountName'), variables('anfAdministratorRoleDefinitionId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('anfAdministratorRoleDefinitionId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, variables('automationAccountName'), variables('monitoringReaderRoleDefinitionId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringReaderRoleDefinitionId'))]",
+        "principalId": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TenantId')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target Azure tenant ID.",
+        "value": "[concat('\"', tenant().tenantId, '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_SubscriptionId')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target Azure subscription ID.",
+        "value": "[concat('\"', subscription().subscriptionId, '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ResourceGroupName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target ANF resource group name. Deploy this template into the ANF resource group for automatic RBAC.",
+        "value": "[concat('\"', resourceGroup().name, '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_AccountName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target ANF account name.",
+        "value": "[concat('\"', parameters('anfAccountName'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_PoolName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target ANF capacity pool name.",
+        "value": "[concat('\"', parameters('anfPoolName'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TestMode')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Runbook mode. Yes=preview only. No=live changes.",
+        "value": "[concat('\"', parameters('testMode'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_CapacityResizeThreshold')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Resize threshold percent.",
+        "value": "[string(parameters('capacityResizeThreshold'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumFreeSpaceGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum free space in GiB.",
+        "value": "[string(parameters('minimumFreeSpaceGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumVolumeGrowthPercent')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum percent growth for expansion.",
+        "value": "[string(parameters('minimumVolumeGrowthPercent'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MaximumVolumeGrowthPercent')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Maximum percent growth per run.",
+        "value": "[string(parameters('maximumVolumeGrowthPercent'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_CapacityLookBackHours')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Capacity metric lookback hours.",
+        "value": "[string(parameters('capacityLookBackHours'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_VolumeMinThroughputMap')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "JSON map of volume name to minimum MiB/s.",
+        "value": "[concat('\"', parameters('volumeMinThroughputMap'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MaxThroughputPerTiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Classic manual QoS throughput cap per TiB.",
+        "value": "[string(parameters('maxThroughputPerTiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumPoolThroughputMibps')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Flexible service level pool throughput floor in MiB/s.",
+        "value": "[string(parameters('minimumPoolThroughputMibps'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_LargeVolumeLimitMode')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Large volume limit profile mode.",
+        "value": "[concat('\"', parameters('largeVolumeLimitMode'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_RegularVolumeMinimumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Regular volume minimum size in GiB.",
+        "value": "[string(parameters('regularVolumeMinimumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_RegularVolumeMaximumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Regular volume maximum size in GiB.",
+        "value": "[string(parameters('regularVolumeMaximumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_LargeVolumeMinimumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Default large volume minimum size in GiB.",
+        "value": "[string(parameters('largeVolumeMinimumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_LargeVolumeMaximumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Default large volume maximum size in GiB.",
+        "value": "[string(parameters('largeVolumeMaximumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_BreakthroughLargeVolumeMinimumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Breakthrough large volume minimum size in GiB.",
+        "value": "[string(parameters('breakthroughLargeVolumeMinimumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_BreakthroughLargeVolumeMaximumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Breakthrough large volume maximum size in GiB.",
+        "value": "[string(parameters('breakthroughLargeVolumeMaximumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ExtraLargeCoolAccessVolumeMinimumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Extra-large cool-access volume minimum size in GiB.",
+        "value": "[string(parameters('extraLargeCoolAccessVolumeMinimumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ExtraLargeCoolAccessVolumeMaximumSizeGiB')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Extra-large cool-access volume maximum size in GiB.",
+        "value": "[string(parameters('extraLargeCoolAccessVolumeMaximumSizeGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('runbookName'))]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Accounts')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.NetAppFiles')]",
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Monitor')]"
+      ],
+      "tags": "[variables('standardTags')]",
+      "properties": {
+        "description": "ANF Capacity Autoscale runbook. WIP script for all service levels and large-volume variants.",
+        "runbookType": "PowerShell",
+        "logProgress": true,
+        "logVerbose": true,
+        "publishContentLink": {
+          "uri": "[parameters('runbookScriptUri')]",
+          "version": "1.0.0.0"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/schedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('scheduleName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "description": "Every 4 hours schedule for ANF Capacity Autoscale runbook.",
+        "startTime": "[parameters('scheduleStartTimeUtc')]",
+        "frequency": "Hour",
+        "interval": 4,
+        "timeZone": "[parameters('scheduleTimeZone')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('jobScheduleName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', variables('automationAccountName'), variables('runbookName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/schedules', variables('automationAccountName'), variables('scheduleName'))]"
+      ],
+      "properties": {
+        "schedule": {
+          "name": "[variables('scheduleName')]"
+        },
+        "runbook": {
+          "name": "[variables('runbookName')]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "automationAccountName": {
+      "type": "string",
+      "value": "[variables('automationAccountName')]"
+    },
+    "runbookName": {
+      "type": "string",
+      "value": "[variables('runbookName')]"
+    },
+    "testModeVariable": {
+      "type": "string",
+      "value": "ANF_TestMode"
+    },
+    "largeVolumeModeVariable": {
+      "type": "string",
+      "value": "ANF_LargeVolumeLimitMode"
+    },
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
+    },
+    "rbac": {
+      "type": "string",
+      "value": "[concat('Assigned ', variables('anfAdministratorRoleName'), ' and Monitoring Reader at the deployment resource group scope. Deploy into the ANF resource group for seamless access.')]"
+    }
+  }
+}

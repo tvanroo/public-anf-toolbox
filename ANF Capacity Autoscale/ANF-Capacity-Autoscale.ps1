@@ -64,6 +64,15 @@ Azure Automation Account Setup Requirements:
    - ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)
    - ANF_CapacityLookBackHours: Metrics lookback hours (int, default: 24)
    - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
+   - ANF_LargeVolumeLimitMode: Auto, Large, Breakthrough, or ExtraLargeCoolAccess (string, default: Auto)
+   - ANF_RegularVolumeMinimumSizeGiB: Regular volume minimum size (int, default: 50)
+   - ANF_RegularVolumeMaximumSizeGiB: Regular volume maximum size (int, default: 102400)
+   - ANF_LargeVolumeMinimumSizeGiB: Default large volume minimum size (int, default: 51200)
+   - ANF_LargeVolumeMaximumSizeGiB: Default large volume maximum size (int, default: 1048576)
+   - ANF_BreakthroughLargeVolumeMinimumSizeGiB: Breakthrough large volume minimum size (int, default: 2400)
+   - ANF_BreakthroughLargeVolumeMaximumSizeGiB: Breakthrough large volume maximum size (int, default: 2457600)
+   - ANF_ExtraLargeCoolAccessVolumeMinimumSizeGiB: Extra-large cool-access volume minimum size (int, default: 2400)
+   - ANF_ExtraLargeCoolAccessVolumeMaximumSizeGiB: Extra-large cool-access volume maximum size (int, default: 7549747)
 
    Throughput decision settings:
    - ANF_VolumeMinThroughputMap: JSON string mapping volume names to minimum throughput
@@ -80,7 +89,8 @@ Azure Automation Account Setup Requirements:
    - Pool expands when volumes won't fit, contracts when full TiB can be freed
    - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
    - Flexible service level throughput is allocated from current pool throughput and is not derived from pool capacity
-   - Minimum volume size is hard-coded at 50 GiB; maximum volume size is hard-coded at 102400 GiB.
+   - Regular, large, breakthrough, and extra-large cool-access volume limits are configurable.
+   - Regular volumes are not converted to large volumes; existing large volumes are detected from Azure properties.
    - Volume contraction uses a hard-coded 15 percentage point utilization buffer and 3x minimum-free-space gate.
    - Missing capacity metric data is treated as 0 GiB consumed.
 
@@ -180,9 +190,34 @@ function Get-AnfSetting {
     
     $minimumFreeSpaceGiB = Get-AnfSetting -Name "ANF_MinimumFreeSpaceGiB"
     if (-not $minimumFreeSpaceGiB) { $minimumFreeSpaceGiB = 256 }                   # Minimum free space threshold in GiB (10 GiB)
-    
-    $minimumVolumeSize = 50                                 # Minimum volume size in GiB (ANF minimum is 50 GiB)
-    $maximumVolumeSize = 102400                             # Maximum volume size in GiB (100 TiB limit)
+
+    # Volume size limit profiles. Regular volumes cannot be converted to large volumes by resizing.
+    $largeVolumeLimitMode = Get-AnfSetting -Name "ANF_LargeVolumeLimitMode" -Default "Auto"
+    $largeVolumeLimitMode = "$largeVolumeLimitMode".Trim()
+    $validLargeVolumeLimitModes = @("Auto", "Large", "Breakthrough", "ExtraLargeCoolAccess")
+    $matchedLargeVolumeLimitMode = $validLargeVolumeLimitModes | Where-Object { $_ -ieq $largeVolumeLimitMode } | Select-Object -First 1
+    if (-not $matchedLargeVolumeLimitMode) {
+        Write-Error "ANF_LargeVolumeLimitMode must be one of: $($validLargeVolumeLimitModes -join ', ')"
+        throw "Invalid large volume limit mode configuration"
+    }
+    $largeVolumeLimitMode = $matchedLargeVolumeLimitMode
+
+    $regularVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_RegularVolumeMinimumSizeGiB"
+    if (-not $regularVolumeMinimumSizeGiB) { $regularVolumeMinimumSizeGiB = 50 }
+    $regularVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_RegularVolumeMaximumSizeGiB"
+    if (-not $regularVolumeMaximumSizeGiB) { $regularVolumeMaximumSizeGiB = 102400 }
+    $largeVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_LargeVolumeMinimumSizeGiB"
+    if (-not $largeVolumeMinimumSizeGiB) { $largeVolumeMinimumSizeGiB = 51200 }
+    $largeVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_LargeVolumeMaximumSizeGiB"
+    if (-not $largeVolumeMaximumSizeGiB) { $largeVolumeMaximumSizeGiB = 1048576 }
+    $breakthroughLargeVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_BreakthroughLargeVolumeMinimumSizeGiB"
+    if (-not $breakthroughLargeVolumeMinimumSizeGiB) { $breakthroughLargeVolumeMinimumSizeGiB = 2400 }
+    $breakthroughLargeVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_BreakthroughLargeVolumeMaximumSizeGiB"
+    if (-not $breakthroughLargeVolumeMaximumSizeGiB) { $breakthroughLargeVolumeMaximumSizeGiB = 2457600 }
+    $extraLargeCoolAccessVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_ExtraLargeCoolAccessVolumeMinimumSizeGiB"
+    if (-not $extraLargeCoolAccessVolumeMinimumSizeGiB) { $extraLargeCoolAccessVolumeMinimumSizeGiB = 2400 }
+    $extraLargeCoolAccessVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_ExtraLargeCoolAccessVolumeMaximumSizeGiB"
+    if (-not $extraLargeCoolAccessVolumeMaximumSizeGiB) { $extraLargeCoolAccessVolumeMaximumSizeGiB = 7549747 }
     
     # QoS and Throughput Settings
     $volumeMinThroughputMapJson = Get-AnfSetting -Name "ANF_VolumeMinThroughputMap"
@@ -223,6 +258,11 @@ Write-Output "ANF Pool: $anfPoolName"
 Write-Output "Capacity Resize Threshold: $capacityResizeThreshold%"
 Write-Output "Minimum Free Space: $minimumFreeSpaceGiB GiB"
 Write-Output "Capacity Lookback Hours: $capacityLookBackHours"
+Write-Output "Large Volume Limit Mode: $largeVolumeLimitMode"
+Write-Output "Regular Volume Limits: $regularVolumeMinimumSizeGiB-$regularVolumeMaximumSizeGiB GiB"
+Write-Output "Large Volume Limits: $largeVolumeMinimumSizeGiB-$largeVolumeMaximumSizeGiB GiB"
+Write-Output "Breakthrough Large Volume Limits: $breakthroughLargeVolumeMinimumSizeGiB-$breakthroughLargeVolumeMaximumSizeGiB GiB"
+Write-Output "Extra-Large Cool-Access Volume Limits: $extraLargeCoolAccessVolumeMinimumSizeGiB-$extraLargeCoolAccessVolumeMaximumSizeGiB GiB"
 if ($volumeMinThroughputMap.Count -gt 0) {
     Write-Output "Volume Min Throughput Map: $($volumeMinThroughputMap.Count) volumes configured"
 }
@@ -322,6 +362,84 @@ function Test-AnfFlexibleServiceLevel {
     }
 
     return "$ServiceLevel".Trim().ToLowerInvariant() -eq "flexible"
+}
+
+function Convert-AnfValueToBool {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [bool]) {
+        return $Value
+    }
+
+    $normalized = "$Value".Trim().ToLowerInvariant()
+    return $normalized -in @("true", "yes", "enabled", "enable", "1")
+}
+
+function Resolve-AnfVolumeSizeProfile {
+    param(
+        [Parameter(Mandatory=$true)][object]$VolumeObject,
+        [Parameter()][double]$CurrentSizeGiB = 0
+    )
+
+    $isLargeVolume = Convert-AnfValueToBool -Value (Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('IsLargeVolume', 'isLargeVolume'))
+    $largeVolumeType = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('LargeVolumeType', 'largeVolumeType')
+    $breakthroughMode = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('BreakthroughMode', 'breakthroughMode')
+    $breakthroughModeEnabled = Convert-AnfValueToBool -Value $breakthroughMode
+    $coolAccess = Convert-AnfValueToBool -Value (Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('CoolAccess', 'coolAccess'))
+
+    $profileName = "Regular"
+    if ($isLargeVolume) {
+        $profileName = $largeVolumeLimitMode
+        if ($profileName -eq "Auto") {
+            $profileSignal = "$largeVolumeType $breakthroughMode".Trim()
+            if ($profileSignal -match "(?i)extra|7\.2" -or ($coolAccess -and [double]$CurrentSizeGiB -gt [double]$breakthroughLargeVolumeMaximumSizeGiB)) {
+                $profileName = "ExtraLargeCoolAccess"
+            } elseif ($breakthroughModeEnabled -or $profileSignal -match "(?i)breakthrough" -or [double]$CurrentSizeGiB -gt [double]$largeVolumeMaximumSizeGiB) {
+                $profileName = "Breakthrough"
+            } else {
+                $profileName = "Large"
+            }
+        }
+    }
+
+    switch ($profileName) {
+        "ExtraLargeCoolAccess" {
+            $minimumSizeGiB = [double]$extraLargeCoolAccessVolumeMinimumSizeGiB
+            $maximumSizeGiB = [double]$extraLargeCoolAccessVolumeMaximumSizeGiB
+        }
+        "Breakthrough" {
+            $minimumSizeGiB = [double]$breakthroughLargeVolumeMinimumSizeGiB
+            $maximumSizeGiB = [double]$breakthroughLargeVolumeMaximumSizeGiB
+        }
+        "Large" {
+            $minimumSizeGiB = [double]$largeVolumeMinimumSizeGiB
+            $maximumSizeGiB = [double]$largeVolumeMaximumSizeGiB
+        }
+        default {
+            $minimumSizeGiB = [double]$regularVolumeMinimumSizeGiB
+            $maximumSizeGiB = [double]$regularVolumeMaximumSizeGiB
+            $profileName = "Regular"
+        }
+    }
+
+    if ([double]$CurrentSizeGiB -gt $maximumSizeGiB) {
+        Write-Warning "Volume '$((Get-AnfVolumeShortName -VolumeObject $VolumeObject))' is already $CurrentSizeGiB GiB, above the configured $profileName maximum of $maximumSizeGiB GiB. Using current size as the effective maximum for this run."
+        $maximumSizeGiB = [double]$CurrentSizeGiB
+    }
+
+    return [PSCustomObject]@{
+        ProfileName = $profileName
+        IsLargeVolume = $isLargeVolume
+        LargeVolumeType = $largeVolumeType
+        BreakthroughMode = $breakthroughMode
+        CoolAccess = $coolAccess
+        MinimumSizeGiB = $minimumSizeGiB
+        MaximumSizeGiB = $maximumSizeGiB
+    }
 }
 
 function Get-AnfVolumeShortName {
@@ -498,12 +616,20 @@ function Convert-AnfRestVolume {
 
     $usageThreshold = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('usageThreshold', 'UsageThreshold')
     $volumeName = Get-AnfVolumeShortName -VolumeObject $Volume
+    $isLargeVolume = Convert-AnfValueToBool -Value (Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('isLargeVolume', 'IsLargeVolume'))
+    $largeVolumeType = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('largeVolumeType', 'LargeVolumeType')
+    $breakthroughMode = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('breakthroughMode', 'BreakthroughMode')
+    $coolAccess = Convert-AnfValueToBool -Value (Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('coolAccess', 'CoolAccess'))
 
     return [PSCustomObject]@{
         Id = $Volume.id
         Name = $volumeName
         Tags = $Volume.tags
         UsageThreshold = [double]$usageThreshold
+        IsLargeVolume = $isLargeVolume
+        LargeVolumeType = $largeVolumeType
+        BreakthroughMode = $breakthroughMode
+        CoolAccess = $coolAccess
         ActualThroughputMibps = [double]$resolvedThroughputMibps
         ThroughputMibps = [double]$resolvedThroughputMibps
         Raw = $Volume
@@ -939,6 +1065,7 @@ foreach ($anfVolume in $anfVolumes) {
     
     # Calculate current volume info
     $currentVolumeSizeGiB = [math]::Round($anfVolume.UsageThreshold / 1024 / 1024 / 1024, 2)
+    $volumeSizeProfile = Resolve-AnfVolumeSizeProfile -VolumeObject $anfVolume -CurrentSizeGiB $currentVolumeSizeGiB
     $currentUtilizationPercent = if ($currentVolumeSizeGiB -gt 0) { 
         [math]::Round(($maxConsumedSizeGiB / $currentVolumeSizeGiB) * 100, 2) 
     } else { 
@@ -967,6 +1094,11 @@ foreach ($anfVolume in $anfVolumes) {
     $volumeDataObject = [PSCustomObject]@{
         ShortName = $volumeName
         VolumeId = $anfVolume.Id
+        IsLargeVolume = $volumeSizeProfile.IsLargeVolume
+        LargeVolumeType = $volumeSizeProfile.LargeVolumeType
+        VolumeLimitProfile = $volumeSizeProfile.ProfileName
+        MinimumSizeGiB = $volumeSizeProfile.MinimumSizeGiB
+        MaximumSizeGiB = $volumeSizeProfile.MaximumSizeGiB
         CurrentSizeGiB = $currentVolumeSizeGiB
         AvgConsumedSizeGiB = $avgConsumedSizeGiB
         MaxConsumedSizeGiB = $maxConsumedSizeGiB
@@ -1003,12 +1135,13 @@ foreach ($volume in $volumeData) {
     Write-Output "    Max Consumed: $($volume.MaxConsumedSizeGiB) GiB" 
     Write-Output "    Free Space: $($volume.FreeSpaceGiB) GiB"
     Write-Output "    Utilization: $($volume.CurrentUtilizationPercent)%"
+    Write-Output "    Volume Profile: $($volume.VolumeLimitProfile) (limits: $($volume.MinimumSizeGiB)-$($volume.MaximumSizeGiB) GiB)"
     
     # Check if volume needs expansion (either threshold exceeded)
     $needsExpansion = ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) -or ($volume.FreeSpaceGiB -le $minimumFreeSpaceGiB)
     
     # Check if volume can be contracted (both thresholds have sufficient headroom)
-    $canContract = ($volume.CurrentUtilizationPercent -le ($capacityResizeThreshold - 15)) -and ($volume.FreeSpaceGiB -ge ($minimumFreeSpaceGiB * 3)) -and ($volume.CurrentSizeGiB -gt $minimumVolumeSize)
+    $canContract = ($volume.CurrentUtilizationPercent -le ($capacityResizeThreshold - 15)) -and ($volume.FreeSpaceGiB -ge ($minimumFreeSpaceGiB * 3)) -and ($volume.CurrentSizeGiB -gt $volume.MinimumSizeGiB)
     
     if ($needsExpansion) {
         Write-Output "    → Expansion needed: Utilization=$($volume.CurrentUtilizationPercent)% (threshold=$capacityResizeThreshold%), Free=$($volume.FreeSpaceGiB)GiB (min=$minimumFreeSpaceGiB GiB)"
@@ -1029,8 +1162,14 @@ foreach ($volume in $volumeData) {
         $calculatedNewSize = [math]::Min($calculatedNewSize, $maximumNewSize)
         
         # Ensure within ANF limits
-        $calculatedNewSize = [math]::Max($calculatedNewSize, $minimumVolumeSize)
-        $calculatedNewSize = [math]::Min($calculatedNewSize, $maximumVolumeSize)
+        $calculatedNewSize = [math]::Max($calculatedNewSize, $volume.MinimumSizeGiB)
+        if ($calculatedNewSize -gt $volume.MaximumSizeGiB) {
+            Write-Warning "    Calculated size $calculatedNewSize GiB exceeds $($volume.VolumeLimitProfile) maximum $($volume.MaximumSizeGiB) GiB. Capping target size."
+            if (-not $volume.IsLargeVolume -and $volume.MaximumSizeGiB -eq [double]$regularVolumeMaximumSizeGiB) {
+                Write-Warning "    Regular volume '$($volume.ShortName)' cannot be converted to a large volume by resize. Create a large volume separately if capacity above $($volume.MaximumSizeGiB) GiB is required."
+            }
+        }
+        $calculatedNewSize = [math]::Min($calculatedNewSize, $volume.MaximumSizeGiB)
         
         Write-Output "    → Final calculated size: $calculatedNewSize GiB"
         
@@ -1052,7 +1191,7 @@ foreach ($volume in $volumeData) {
     } elseif ($canContract) {
         # Calculate new size for contraction - keep adequate free space but minimize over-provisioning
         $optimalSizeWithBuffer = $volume.MaxConsumedSizeGiB + $minimumFreeSpaceGiB
-        $newSize = [math]::Max($optimalSizeWithBuffer, $minimumVolumeSize)
+        $newSize = [math]::Max($optimalSizeWithBuffer, $volume.MinimumSizeGiB)
         
         # Ensure we're actually reducing
         if ($newSize -lt $volume.CurrentSizeGiB) {
