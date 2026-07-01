@@ -78,8 +78,7 @@ These values are currently fixed in the script rather than exposed as inputs.
 | Decision | Value | Notes |
 | --- | --- | --- |
 | Default volume minimum throughput | `1` MiB/s | Used when a volume is absent from `ANF_VolumeMinThroughputMap`. |
-| Contraction utilization buffer | `15` percentage points | Contraction requires utilization at or below `ANF_CapacityResizeThreshold - 15`. |
-| Contraction free-space gate | `3x` | Contraction requires free space at or above `ANF_MinimumFreeSpaceGiB * 3`. |
+| Volume contraction target | `MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB` | Volumes that do not need expansion can shrink directly to this target, subject to fixed regular/large volume limits. |
 | Pool sizing increment | `1024` GiB | Pool targets are rounded to whole TiB. |
 | Minimum pool size | `1` TiB | Pool target is never below 1 TiB. |
 | Capacity metric time grain | `01:00:00` | `VolumeLogicalSize` is queried hourly over the lookback window. |

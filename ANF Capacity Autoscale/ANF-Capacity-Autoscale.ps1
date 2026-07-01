@@ -67,9 +67,9 @@ Azure Automation Account Setup Requirements:
 
 4. VOLUME EXPANSION/CONTRACTION LOGIC:
    - Expands volume if utilization % OR absolute GiB threshold is exceeded
-   - Contracts volume if both thresholds have sufficient headroom (15% buffer)
+   - Contracts volumes to max observed consumed size plus configured free space when they are oversized.
    - Pool automatically resizes in TiB increments for maximum cost efficiency
-   - Pool expands when volumes won't fit, contracts when full TiB can be freed
+   - Pool expands or contracts to the minimum whole-TiB size required by planned volume targets
    - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
    - Flexible service level throughput is allocated from current pool throughput and is not derived from pool capacity
    - Classic service level throughput per TiB is hard-coded: Standard=16, Premium=64, Ultra=128 MiB/s.
@@ -78,7 +78,7 @@ Azure Automation Account Setup Requirements:
    - Large volume minimum is fixed at 51200 GiB; maximum defaults to 1048576 GiB and can be overridden.
    - Regular volumes are not converted to large volumes; existing large volumes are detected from Azure properties.
    - Breakthrough large volumes are excluded from changes and produce a warning.
-   - Volume contraction uses a hard-coded 15 percentage point utilization buffer and 3x minimum-free-space gate.
+   - Volume contraction targets MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB without extra utilization or free-space gates.
    - Missing capacity metric data is treated as 0 GiB consumed.
 
 5. RECOMMENDED SCHEDULE:
@@ -1185,8 +1185,8 @@ foreach ($volume in $volumeData) {
     # Check if volume needs expansion (either threshold exceeded)
     $needsExpansion = ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) -or ($volume.FreeSpaceGiB -le $minimumFreeSpaceGiB)
     
-    # Check if volume can be contracted (both thresholds have sufficient headroom)
-    $canContract = ($volume.CurrentUtilizationPercent -le ($capacityResizeThreshold - 15)) -and ($volume.FreeSpaceGiB -ge ($minimumFreeSpaceGiB * 3)) -and ($volume.CurrentSizeGiB -gt $volume.MinimumSizeGiB)
+    # If expansion is not needed, shrink directly to the consumed-size target subject to the fixed ANF size profile.
+    $canContract = $volume.CurrentSizeGiB -gt $volume.MinimumSizeGiB
     
     if ($needsExpansion) {
         Write-Output "    → Expansion needed: Utilization=$($volume.CurrentUtilizationPercent)% (threshold=$capacityResizeThreshold%), Free=$($volume.FreeSpaceGiB)GiB (min=$minimumFreeSpaceGiB GiB)"
@@ -1243,7 +1243,7 @@ foreach ($volume in $volumeData) {
             $volume.NeedsResize = $true
             $volume.ResizeAction = "Contract"
             $volume.NewSizeGiB = $newSize
-            $volume.ResizeReason = "Over-provisioned (utilization: $($volume.CurrentUtilizationPercent)%, free: $($volume.FreeSpaceGiB) GiB)"
+            $volume.ResizeReason = "Targeting max consumed plus configured free space (utilization: $($volume.CurrentUtilizationPercent)%, free: $($volume.FreeSpaceGiB) GiB)"
             $volumesNeedingResize += $volume
             Write-Output "    → CONTRACT: $($volume.CurrentSizeGiB) GiB → $($volume.NewSizeGiB) GiB"
         } else {
@@ -1260,26 +1260,17 @@ $newTotalVolumeSize = ($volumeData | Measure-Object -Property NewSizeGiB -Sum).S
 $currentPoolSizeGiB = [math]::Round($anfPool.Size / 1024 / 1024 / 1024, 2)
 $currentPoolSizeTiB = [math]::Round($currentPoolSizeGiB / 1024, 0)
 
-# Calculate optimal pool size in TiB increments - target maximum utilization
-# Pool should be just large enough to fit all volumes (rounded up to next TiB)
+# Calculate optimal pool size in TiB increments. Pool should be just large enough
+# to fit all volume targets, rounded up to the next TiB.
 $requiredPoolSizeTiB = [math]::Ceiling($newTotalVolumeSize / 1024)
 
-# Check if we can shrink the pool by a full TiB (1024 GiB buffer for safety)
-$canShrinkToTiB = [math]::Floor(($currentPoolSizeGiB - $newTotalVolumeSize - 1024) / 1024)
-if ($canShrinkToTiB -gt 0) {
-    # We can shrink - use the minimum required size for maximum cost efficiency
-    $optimalPoolSizeTiB = $requiredPoolSizeTiB
-} else {
-    # Use the minimum required size
-    $optimalPoolSizeTiB = $requiredPoolSizeTiB
-}
-
 # Ensure minimum pool size of 1 TiB
-$optimalPoolSizeTiB = [math]::Max($optimalPoolSizeTiB, 1)
+$optimalPoolSizeTiB = [math]::Max($requiredPoolSizeTiB, 1)
 $optimalPoolSizeGiB = $optimalPoolSizeTiB * 1024
 
 $poolNeedsResize = $optimalPoolSizeTiB -ne $currentPoolSizeTiB
 $poolAction = if ($optimalPoolSizeTiB -gt $currentPoolSizeTiB) { "Expand" } elseif ($optimalPoolSizeTiB -lt $currentPoolSizeTiB) { "Contract" } else { "None" }
+$poolDeltaTiB = [math]::Abs($optimalPoolSizeTiB - $currentPoolSizeTiB)
 
 Write-Output ""
 Write-Output "Pool sizing analysis (TiB-based):"
@@ -1289,8 +1280,10 @@ Write-Output "  New total volume size: $newTotalVolumeSize GiB"
 Write-Output "  Required pool size: $requiredPoolSizeTiB TiB (minimum)"
 Write-Output "  Optimal pool size: $optimalPoolSizeGiB GiB ($optimalPoolSizeTiB TiB)"
 Write-Output "  Pool action required: $poolAction"
-if ($canShrinkToTiB -gt 0) {
-    Write-Output "  Can shrink by: $canShrinkToTiB TiB"
+if ($poolAction -eq "Contract") {
+    Write-Output "  Planned pool shrink: $poolDeltaTiB TiB"
+} elseif ($poolAction -eq "Expand") {
+    Write-Output "  Planned pool expansion: $poolDeltaTiB TiB"
 }
 
 # Calculate QoS throughput allocation if pool is Manual QoS
