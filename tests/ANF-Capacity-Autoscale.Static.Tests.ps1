@@ -27,6 +27,11 @@ if ($parseErrors.Count -gt 0) {
 
 Assert-Contains -Haystack $scriptText -Needle '$anfApiVersion = "2026-04-01"' -Message 'Expected modern ANF read API version to be declared.'
 Assert-Contains -Haystack $scriptText -Needle 'function Invoke-AnfArmJson' -Message 'Expected shared ARM REST helper for FSL-compatible API calls.'
+Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfSetting' -Message 'Expected shared setting helper for Automation Variable and Cloud Shell environment variable support.'
+Assert-Contains -Haystack $scriptText -Needle '[Environment]::GetEnvironmentVariable($Name)' -Message 'Expected Cloud Shell environment variable lookup in setting helper.'
+Assert-Contains -Haystack $scriptText -Needle 'Get-AnfSetting -Name "ANF_ResourceGroupName"' -Message 'Expected resource group setting to support ANF_ResourceGroupName environment variable.'
+Assert-Contains -Haystack $scriptText -Needle 'Get-AnfSetting -Name "ANF_AccountName"' -Message 'Expected account setting to support ANF_AccountName environment variable.'
+Assert-Contains -Haystack $scriptText -Needle 'Get-AnfSetting -Name "ANF_PoolName"' -Message 'Expected pool setting to support ANF_PoolName environment variable.'
 Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfPool' -Message 'Expected pool retrieval wrapper that can resolve service level and throughput from REST.'
 Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfVolumes' -Message 'Expected volume retrieval wrapper that can read FSL throughput fields.'
 Assert-Contains -Haystack $scriptText -Needle 'function Update-AnfFslPoolThroughputMibps' -Message 'Expected FSL pool throughput update helper.'

@@ -120,33 +120,59 @@ foreach ($module in $requiredModules) {
     }
 }
 
+function Get-AnfSetting {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter()][object]$Default = $null
+    )
+
+    $value = $null
+    if ($runningInAutomation -and (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue)) {
+        try {
+            $value = Get-AutomationVariable -Name $Name -ErrorAction SilentlyContinue
+        } catch {
+            $value = $null
+        }
+    }
+
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        $value = [Environment]::GetEnvironmentVariable($Name)
+    }
+
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        return $Default
+    }
+
+    return $value
+}
+
 # User Editable Variables (can be set as Automation Account variables):
-    # Get variables from Automation Account if available, otherwise use defaults
-    $tenantId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_TenantId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
-    $subscriptionId = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_SubscriptionId" -ErrorAction SilentlyContinue } else { "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" }
-    $resourceGroupName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_ResourceGroupName" -ErrorAction SilentlyContinue } else { "example-rg" }
-    $anfAccountName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_AccountName" -ErrorAction SilentlyContinue } else { "example-anf-acct" }
+    # Get variables from Automation Account, Cloud Shell environment variables, or defaults
+    $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    $subscriptionId = Get-AnfSetting -Name "ANF_SubscriptionId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    $resourceGroupName = Get-AnfSetting -Name "ANF_ResourceGroupName" -Default "example-rg"
+    $anfAccountName = Get-AnfSetting -Name "ANF_AccountName" -Default "example-anf-acct"
     
-    $anfPoolName = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_PoolName" -ErrorAction SilentlyContinue } else { "example-anf-pool" }
+    $anfPoolName = Get-AnfSetting -Name "ANF_PoolName" -Default "example-anf-pool"
     
     # Capacity Management Settings (can be overridden with Automation Variables)
-    $capacityResizeThreshold = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_CapacityResizeThreshold" -ErrorAction SilentlyContinue } else { $null }
+    $capacityResizeThreshold = Get-AnfSetting -Name "ANF_CapacityResizeThreshold"
     if (-not $capacityResizeThreshold) { $capacityResizeThreshold = 99 }            # Percentage at which to resize volumes (95%)
     
-    $minimumVolumeGrowthPercent = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MinimumVolumeGrowthPercent" -ErrorAction SilentlyContinue } else { $null }
+    $minimumVolumeGrowthPercent = Get-AnfSetting -Name "ANF_MinimumVolumeGrowthPercent"
     if (-not $minimumVolumeGrowthPercent) { $minimumVolumeGrowthPercent = 0 }      # Minimum percentage to grow a volume when resizing (20%)
     
-    $maximumVolumeGrowthPercent = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MaximumVolumeGrowthPercent" -ErrorAction SilentlyContinue } else { $null }
+    $maximumVolumeGrowthPercent = Get-AnfSetting -Name "ANF_MaximumVolumeGrowthPercent"
     if (-not $maximumVolumeGrowthPercent) { $maximumVolumeGrowthPercent = 10000000 }     # Maximum percentage to grow a volume in a single operation (100%)
     
-    $minimumFreeSpaceGiB = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MinimumFreeSpaceGiB" -ErrorAction SilentlyContinue } else { $null }
+    $minimumFreeSpaceGiB = Get-AnfSetting -Name "ANF_MinimumFreeSpaceGiB"
     if (-not $minimumFreeSpaceGiB) { $minimumFreeSpaceGiB = 256 }                   # Minimum free space threshold in GiB (10 GiB)
     
     $minimumVolumeSize = 50                                 # Minimum volume size in GiB (ANF minimum is 50 GiB)
     $maximumVolumeSize = 102400                             # Maximum volume size in GiB (100 TiB limit)
     
     # QoS and Throughput Settings
-    $volumeMinThroughputMapJson = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_VolumeMinThroughputMap" -ErrorAction SilentlyContinue } else { $null }
+    $volumeMinThroughputMapJson = Get-AnfSetting -Name "ANF_VolumeMinThroughputMap"
     $volumeMinThroughputMap = @{}
     if ($volumeMinThroughputMapJson) {
         try {
@@ -159,22 +185,18 @@ foreach ($module in $requiredModules) {
     }
     
     # Maximum throughput per TiB setting (used to cap volume throughput allocation)
-    $maxThroughputPerTiB = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MaxThroughputPerTiB" -ErrorAction SilentlyContinue } else { $null }
+    $maxThroughputPerTiB = Get-AnfSetting -Name "ANF_MaxThroughputPerTiB"
     if (-not $maxThroughputPerTiB) { $maxThroughputPerTiB = 68 }               # Default: 1000 MiB/s per TiB (no effective limit for most cases)
 
-    $minimumPoolThroughputMibps = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_MinimumPoolThroughputMibps" -ErrorAction SilentlyContinue } else { $null }
+    $minimumPoolThroughputMibps = Get-AnfSetting -Name "ANF_MinimumPoolThroughputMibps"
     if (-not $minimumPoolThroughputMibps) { $minimumPoolThroughputMibps = 128 } # Flexible service level included pool throughput floor
     
     # Monitoring Settings
-    $capacityLookBackHours = if ($runningInAutomation) { Get-AutomationVariable -Name "ANF_CapacityLookBackHours" -ErrorAction SilentlyContinue } else { $null }
+    $capacityLookBackHours = Get-AnfSetting -Name "ANF_CapacityLookBackHours"
     if (-not $capacityLookBackHours) { $capacityLookBackHours = 24 }               # Hours to look back for capacity metrics (24 hours)
     
     # Test mode defaults to "Yes" for safety. Set ANF_TestMode to "No" only after reviewing the planned changes.
-    $testMode = if ($runningInAutomation) { 
-        Get-AutomationVariable -Name "ANF_TestMode" -ErrorAction SilentlyContinue 
-    } else { 
-        "Yes"  # Default to test mode for local execution
-    }
+    $testMode = Get-AnfSetting -Name "ANF_TestMode" -Default "Yes"
     if (-not $testMode) { $testMode = "Yes" }
     
 # Input validation and configuration display
