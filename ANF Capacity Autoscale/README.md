@@ -18,7 +18,7 @@ By using any content from this repository, you acknowledge that you do so at you
 [ANF Capacity Autoscale](./ANF-Capacity-Autoscale.ps1)
     - Monitors volume capacity utilization and automatically adjusts volume sizes to prevent running out of space while keeping the pool size optimized for cost efficiency. Analyzes consumption trends and proactively resizes volumes when utilization thresholds are reached.
 
-The deployment buttons create an Azure Automation Account, import the runbook, create the editable `ANF_*` Automation variables, assign the managed identity `Azure NetApp Files Administrator` and `Monitoring Reader` at the deployment resource group scope, and schedule the runbook every 4 hours. Deploy the template into the resource group that contains the ANF account and capacity pool for the automatic RBAC assignment to line up with the target resources.
+The deployment buttons create an Azure Automation Account, import the runbook on the PowerShell 7.2 runtime, create the editable `ANF_*` Automation variables, assign the managed identity `Azure NetApp Files Administrator` and `Monitoring Reader` at the deployment resource group scope, and schedule the runbook every 4 hours. Deploy the template into the resource group that contains the ANF account and capacity pool for the automatic RBAC assignment to line up with the target resources.
 
 The standard ARM deployment experience still provides subscription and resource group pickers for the Automation Account deployment scope. For the ANF target, copy the capacity pool Resource ID from Azure and paste it into `capacityPoolResourceId`; the runbook derives the subscription, resource group, ANF account, and pool names from that single value.
 

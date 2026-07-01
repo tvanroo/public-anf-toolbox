@@ -340,7 +340,7 @@
       "tags": "[variables('standardTags')]",
       "properties": {
         "description": "ANF Capacity Autoscale runbook. WIP script for all service levels and large-volume variants.",
-        "runbookType": "PowerShell",
+        "runbookType": "PowerShell72",
         "logProgress": true,
         "logVerbose": true,
         "publishContentLink": {

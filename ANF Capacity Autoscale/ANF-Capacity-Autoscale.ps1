@@ -176,6 +176,28 @@ function Resolve-AnfCapacityPoolResourceId {
     }
 }
 
+function Convert-AnfJsonObjectToHashtable {
+    param([object]$InputObject)
+
+    $hash = @{}
+    if ($null -eq $InputObject) {
+        return $hash
+    }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        foreach ($key in $InputObject.Keys) {
+            $hash[$key] = $InputObject[$key]
+        }
+        return $hash
+    }
+
+    foreach ($property in $InputObject.PSObject.Properties) {
+        $hash[$property.Name] = $property.Value
+    }
+
+    return $hash
+}
+
 # User Editable Variables (can be set as Automation Account variables):
     # Get variables from Automation Account, Cloud Shell environment variables, or defaults
     $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
@@ -228,7 +250,8 @@ function Resolve-AnfCapacityPoolResourceId {
     $volumeMinThroughputMap = @{}
     if ($volumeMinThroughputMapJson) {
         try {
-            $volumeMinThroughputMap = $volumeMinThroughputMapJson | ConvertFrom-Json -AsHashtable
+            $volumeMinThroughputMapObject = $volumeMinThroughputMapJson | ConvertFrom-Json
+            $volumeMinThroughputMap = Convert-AnfJsonObjectToHashtable -InputObject $volumeMinThroughputMapObject
             Write-Output "Loaded volume minimum throughput map: $($volumeMinThroughputMap.Count) volumes configured"
         } catch {
             Write-Warning "Failed to parse ANF_VolumeMinThroughputMap JSON: $_"
@@ -826,6 +849,13 @@ function Update-AnfVolumeThroughput {
 # Connect to Azure using Managed Identity (for Automation Account) or device code login
 Write-Output "Authenticating to Azure..."
 try {
+    try {
+        $null = Disable-AzContextAutosave -Scope Process -ErrorAction Stop
+        Write-Output "Disabled Az context autosave for this run"
+    } catch {
+        Write-Warning "Unable to disable Az context autosave: $($_.Exception.Message)"
+    }
+
     if ($runningInAutomation) {
         # Use Managed Identity for Azure Automation Account
         Write-Output "Connecting using Managed Identity..."
