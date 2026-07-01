@@ -80,111 +80,12 @@
         "description": "JSON map of volume name to minimum MiB/s, for example {\"vol1\":10,\"vol2\":15}. Leave {} if not needed."
       }
     },
-    "maxThroughputPerTiB": {
+    "scheduleStartDelayMinutes": {
       "type": "int",
-      "defaultValue": 68,
+      "defaultValue": 20,
       "minValue": 1,
       "metadata": {
-        "description": "Classic manual QoS cap for calculated throughput per TiB. Flexible service level does not derive throughput from pool size."
-      }
-    },
-    "minimumPoolThroughputMibps": {
-      "type": "int",
-      "defaultValue": 128,
-      "minValue": 1,
-      "metadata": {
-        "description": "Flexible service level pool throughput floor in MiB/s."
-      }
-    },
-    "largeVolumeLimitMode": {
-      "type": "string",
-      "defaultValue": "Auto",
-      "allowedValues": [
-        "Auto",
-        "Large",
-        "Breakthrough",
-        "ExtraLargeCoolAccess"
-      ],
-      "metadata": {
-        "description": "Auto detects existing large-volume variants from Azure properties. Explicit modes override the large-volume profile only for volumes already marked as large."
-      }
-    },
-    "regularVolumeMinimumSizeGiB": {
-      "type": "int",
-      "defaultValue": 50,
-      "minValue": 1,
-      "metadata": {
-        "description": "Regular volume minimum size guard in GiB."
-      }
-    },
-    "regularVolumeMaximumSizeGiB": {
-      "type": "int",
-      "defaultValue": 102400,
-      "minValue": 50,
-      "metadata": {
-        "description": "Regular volume maximum size guard in GiB."
-      }
-    },
-    "largeVolumeMinimumSizeGiB": {
-      "type": "int",
-      "defaultValue": 51200,
-      "minValue": 1,
-      "metadata": {
-        "description": "Default large volume minimum size guard in GiB."
-      }
-    },
-    "largeVolumeMaximumSizeGiB": {
-      "type": "int",
-      "defaultValue": 1048576,
-      "minValue": 51200,
-      "metadata": {
-        "description": "Default large volume maximum size guard in GiB."
-      }
-    },
-    "breakthroughLargeVolumeMinimumSizeGiB": {
-      "type": "int",
-      "defaultValue": 2400,
-      "minValue": 1,
-      "metadata": {
-        "description": "Breakthrough large volume minimum size guard in GiB."
-      }
-    },
-    "breakthroughLargeVolumeMaximumSizeGiB": {
-      "type": "int",
-      "defaultValue": 2457600,
-      "minValue": 2400,
-      "metadata": {
-        "description": "Breakthrough large volume maximum size guard in GiB."
-      }
-    },
-    "extraLargeCoolAccessVolumeMinimumSizeGiB": {
-      "type": "int",
-      "defaultValue": 2400,
-      "minValue": 1,
-      "metadata": {
-        "description": "Extra-large cool-access volume minimum size guard in GiB."
-      }
-    },
-    "extraLargeCoolAccessVolumeMaximumSizeGiB": {
-      "type": "int",
-      "defaultValue": 7549747,
-      "minValue": 2400,
-      "metadata": {
-        "description": "Extra-large cool-access volume maximum size guard in GiB."
-      }
-    },
-    "scheduleTimeZone": {
-      "type": "string",
-      "defaultValue": "UTC",
-      "metadata": {
-        "description": "Time zone used by the recurring run schedule."
-      }
-    },
-    "scheduleStartTimeUtc": {
-      "type": "string",
-      "defaultValue": "[dateTimeAdd(utcNow('u'), 'PT20M')]",
-      "metadata": {
-        "description": "UTC start time for the first run. Default is deployment time + 20 minutes."
+        "description": "Minutes from deployment time until the first scheduled run starts."
       }
     },
     "runbookScriptUri": {
@@ -198,7 +99,7 @@
   "variables": {
     "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json",
     "editableTestModeVariable": "ANF_TestMode",
-    "editableLargeVolumeModeVariable": "ANF_LargeVolumeLimitMode"
+    "editableLargeVolumeMaximumSizeVariable": "ANF_LargeVolumeMaximumSizeGiB"
   },
   "resources": [
     {
@@ -242,44 +143,8 @@
           "volumeMinThroughputMap": {
             "value": "[parameters('volumeMinThroughputMap')]"
           },
-          "maxThroughputPerTiB": {
-            "value": "[parameters('maxThroughputPerTiB')]"
-          },
-          "minimumPoolThroughputMibps": {
-            "value": "[parameters('minimumPoolThroughputMibps')]"
-          },
-          "largeVolumeLimitMode": {
-            "value": "[parameters('largeVolumeLimitMode')]"
-          },
-          "regularVolumeMinimumSizeGiB": {
-            "value": "[parameters('regularVolumeMinimumSizeGiB')]"
-          },
-          "regularVolumeMaximumSizeGiB": {
-            "value": "[parameters('regularVolumeMaximumSizeGiB')]"
-          },
-          "largeVolumeMinimumSizeGiB": {
-            "value": "[parameters('largeVolumeMinimumSizeGiB')]"
-          },
-          "largeVolumeMaximumSizeGiB": {
-            "value": "[parameters('largeVolumeMaximumSizeGiB')]"
-          },
-          "breakthroughLargeVolumeMinimumSizeGiB": {
-            "value": "[parameters('breakthroughLargeVolumeMinimumSizeGiB')]"
-          },
-          "breakthroughLargeVolumeMaximumSizeGiB": {
-            "value": "[parameters('breakthroughLargeVolumeMaximumSizeGiB')]"
-          },
-          "extraLargeCoolAccessVolumeMinimumSizeGiB": {
-            "value": "[parameters('extraLargeCoolAccessVolumeMinimumSizeGiB')]"
-          },
-          "extraLargeCoolAccessVolumeMaximumSizeGiB": {
-            "value": "[parameters('extraLargeCoolAccessVolumeMaximumSizeGiB')]"
-          },
-          "scheduleTimeZone": {
-            "value": "[parameters('scheduleTimeZone')]"
-          },
-          "scheduleStartTimeUtc": {
-            "value": "[parameters('scheduleStartTimeUtc')]"
+          "scheduleStartDelayMinutes": {
+            "value": "[parameters('scheduleStartDelayMinutes')]"
           },
           "runbookScriptUri": {
             "value": "[parameters('runbookScriptUri')]"
@@ -293,9 +158,9 @@
       "type": "string",
       "value": "[variables('editableTestModeVariable')]"
     },
-    "largeVolumeModeVariable": {
+    "largeVolumeMaximumSizeVariable": {
       "type": "string",
-      "value": "[variables('editableLargeVolumeModeVariable')]"
+      "value": "[variables('editableLargeVolumeMaximumSizeVariable')]"
     },
     "template": {
       "type": "string",

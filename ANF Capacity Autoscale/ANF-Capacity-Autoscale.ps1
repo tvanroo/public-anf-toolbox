@@ -64,23 +64,11 @@ Azure Automation Account Setup Requirements:
    - ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)
    - ANF_CapacityLookBackHours: Metrics lookback hours (int, default: 24)
    - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
-   - ANF_LargeVolumeLimitMode: Auto, Large, Breakthrough, or ExtraLargeCoolAccess (string, default: Auto)
-   - ANF_RegularVolumeMinimumSizeGiB: Regular volume minimum size (int, default: 50)
-   - ANF_RegularVolumeMaximumSizeGiB: Regular volume maximum size (int, default: 102400)
-   - ANF_LargeVolumeMinimumSizeGiB: Default large volume minimum size (int, default: 51200)
-   - ANF_LargeVolumeMaximumSizeGiB: Default large volume maximum size (int, default: 1048576)
-   - ANF_BreakthroughLargeVolumeMinimumSizeGiB: Breakthrough large volume minimum size (int, default: 2400)
-   - ANF_BreakthroughLargeVolumeMaximumSizeGiB: Breakthrough large volume maximum size (int, default: 2457600)
-   - ANF_ExtraLargeCoolAccessVolumeMinimumSizeGiB: Extra-large cool-access volume minimum size (int, default: 2400)
-   - ANF_ExtraLargeCoolAccessVolumeMaximumSizeGiB: Extra-large cool-access volume maximum size (int, default: 7549747)
+   - ANF_LargeVolumeMaximumSizeGiB: Large volume maximum size guard (int, default: 1048576)
 
    Throughput decision settings:
    - ANF_VolumeMinThroughputMap: JSON string mapping volume names to minimum throughput
      Example: '{"vol1":10,"vol2":15,"vol3":5}' - sets minimum MiB/s per volume
-   - ANF_MaxThroughputPerTiB: Maximum throughput per TiB override (int, default: 68)
-     Overrides the calculated pool MiB/s per TiB ratio for classic manual QoS throughput calculation
-   - ANF_MinimumPoolThroughputMibps: Minimum Flexible service level pool throughput (int, default: 128)
-     Used only for Flexible service level pools, where capacity and throughput are managed independently
 
 4. VOLUME EXPANSION/CONTRACTION LOGIC:
    - Expands volume if utilization % OR absolute GiB threshold is exceeded
@@ -89,8 +77,12 @@ Azure Automation Account Setup Requirements:
    - Pool expands when volumes won't fit, contracts when full TiB can be freed
    - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
    - Flexible service level throughput is allocated from current pool throughput and is not derived from pool capacity
-   - Regular, large, breakthrough, and extra-large cool-access volume limits are configurable.
+   - Classic service level throughput per TiB is hard-coded: Standard=16, Premium=64, Ultra=128 MiB/s.
+   - Flexible service level minimum pool throughput is hard-coded at 128 MiB/s.
+   - Regular volume limits are fixed at 50 GiB minimum and 102400 GiB maximum.
+   - Large volume minimum is fixed at 51200 GiB; maximum defaults to 1048576 GiB and can be overridden.
    - Regular volumes are not converted to large volumes; existing large volumes are detected from Azure properties.
+   - Breakthrough large volumes are excluded from changes and produce a warning.
    - Volume contraction uses a hard-coded 15 percentage point utilization buffer and 3x minimum-free-space gate.
    - Missing capacity metric data is treated as 0 GiB consumed.
 
@@ -192,32 +184,11 @@ function Get-AnfSetting {
     if (-not $minimumFreeSpaceGiB) { $minimumFreeSpaceGiB = 256 }                   # Minimum free space threshold in GiB (10 GiB)
 
     # Volume size limit profiles. Regular volumes cannot be converted to large volumes by resizing.
-    $largeVolumeLimitMode = Get-AnfSetting -Name "ANF_LargeVolumeLimitMode" -Default "Auto"
-    $largeVolumeLimitMode = "$largeVolumeLimitMode".Trim()
-    $validLargeVolumeLimitModes = @("Auto", "Large", "Breakthrough", "ExtraLargeCoolAccess")
-    $matchedLargeVolumeLimitMode = $validLargeVolumeLimitModes | Where-Object { $_ -ieq $largeVolumeLimitMode } | Select-Object -First 1
-    if (-not $matchedLargeVolumeLimitMode) {
-        Write-Error "ANF_LargeVolumeLimitMode must be one of: $($validLargeVolumeLimitModes -join ', ')"
-        throw "Invalid large volume limit mode configuration"
-    }
-    $largeVolumeLimitMode = $matchedLargeVolumeLimitMode
-
-    $regularVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_RegularVolumeMinimumSizeGiB"
-    if (-not $regularVolumeMinimumSizeGiB) { $regularVolumeMinimumSizeGiB = 50 }
-    $regularVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_RegularVolumeMaximumSizeGiB"
-    if (-not $regularVolumeMaximumSizeGiB) { $regularVolumeMaximumSizeGiB = 102400 }
-    $largeVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_LargeVolumeMinimumSizeGiB"
-    if (-not $largeVolumeMinimumSizeGiB) { $largeVolumeMinimumSizeGiB = 51200 }
+    $regularVolumeMinimumSizeGiB = 50
+    $regularVolumeMaximumSizeGiB = 102400
+    $largeVolumeMinimumSizeGiB = 51200
     $largeVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_LargeVolumeMaximumSizeGiB"
     if (-not $largeVolumeMaximumSizeGiB) { $largeVolumeMaximumSizeGiB = 1048576 }
-    $breakthroughLargeVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_BreakthroughLargeVolumeMinimumSizeGiB"
-    if (-not $breakthroughLargeVolumeMinimumSizeGiB) { $breakthroughLargeVolumeMinimumSizeGiB = 2400 }
-    $breakthroughLargeVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_BreakthroughLargeVolumeMaximumSizeGiB"
-    if (-not $breakthroughLargeVolumeMaximumSizeGiB) { $breakthroughLargeVolumeMaximumSizeGiB = 2457600 }
-    $extraLargeCoolAccessVolumeMinimumSizeGiB = Get-AnfSetting -Name "ANF_ExtraLargeCoolAccessVolumeMinimumSizeGiB"
-    if (-not $extraLargeCoolAccessVolumeMinimumSizeGiB) { $extraLargeCoolAccessVolumeMinimumSizeGiB = 2400 }
-    $extraLargeCoolAccessVolumeMaximumSizeGiB = Get-AnfSetting -Name "ANF_ExtraLargeCoolAccessVolumeMaximumSizeGiB"
-    if (-not $extraLargeCoolAccessVolumeMaximumSizeGiB) { $extraLargeCoolAccessVolumeMaximumSizeGiB = 7549747 }
     
     # QoS and Throughput Settings
     $volumeMinThroughputMapJson = Get-AnfSetting -Name "ANF_VolumeMinThroughputMap"
@@ -232,12 +203,7 @@ function Get-AnfSetting {
         }
     }
     
-    # Maximum throughput per TiB setting (used to cap volume throughput allocation)
-    $maxThroughputPerTiB = Get-AnfSetting -Name "ANF_MaxThroughputPerTiB"
-    if (-not $maxThroughputPerTiB) { $maxThroughputPerTiB = 68 }               # Default: 1000 MiB/s per TiB (no effective limit for most cases)
-
-    $minimumPoolThroughputMibps = Get-AnfSetting -Name "ANF_MinimumPoolThroughputMibps"
-    if (-not $minimumPoolThroughputMibps) { $minimumPoolThroughputMibps = 128 } # Flexible service level included pool throughput floor
+    $minimumPoolThroughputMibps = 128 # Flexible service level included pool throughput floor
     
     # Monitoring Settings
     $capacityLookBackHours = Get-AnfSetting -Name "ANF_CapacityLookBackHours"
@@ -258,15 +224,12 @@ Write-Output "ANF Pool: $anfPoolName"
 Write-Output "Capacity Resize Threshold: $capacityResizeThreshold%"
 Write-Output "Minimum Free Space: $minimumFreeSpaceGiB GiB"
 Write-Output "Capacity Lookback Hours: $capacityLookBackHours"
-Write-Output "Large Volume Limit Mode: $largeVolumeLimitMode"
 Write-Output "Regular Volume Limits: $regularVolumeMinimumSizeGiB-$regularVolumeMaximumSizeGiB GiB"
 Write-Output "Large Volume Limits: $largeVolumeMinimumSizeGiB-$largeVolumeMaximumSizeGiB GiB"
-Write-Output "Breakthrough Large Volume Limits: $breakthroughLargeVolumeMinimumSizeGiB-$breakthroughLargeVolumeMaximumSizeGiB GiB"
-Write-Output "Extra-Large Cool-Access Volume Limits: $extraLargeCoolAccessVolumeMinimumSizeGiB-$extraLargeCoolAccessVolumeMaximumSizeGiB GiB"
 if ($volumeMinThroughputMap.Count -gt 0) {
     Write-Output "Volume Min Throughput Map: $($volumeMinThroughputMap.Count) volumes configured"
 }
-Write-Output "Max Throughput per TiB: $maxThroughputPerTiB MiB/s"
+Write-Output "Classic Manual QoS Rates: Standard=16, Premium=64, Ultra=128 MiB/s per TiB"
 Write-Output "Minimum FSL Pool Throughput: $minimumPoolThroughputMibps MiB/s"
 
 if ($testMode -eq "Yes") {
@@ -364,6 +327,19 @@ function Test-AnfFlexibleServiceLevel {
     return "$ServiceLevel".Trim().ToLowerInvariant() -eq "flexible"
 }
 
+function Get-AnfClassicManualThroughputPerTiB {
+    param([Parameter(Mandatory=$true)][object]$ServiceLevel)
+
+    switch ("$ServiceLevel".Trim()) {
+        "Standard" { return 16 }
+        "Premium" { return 64 }
+        "Ultra" { return 128 }
+        default {
+            throw "Unsupported classic service level '$ServiceLevel' for manual QoS throughput calculation. Expected Standard, Premium, or Ultra."
+        }
+    }
+}
+
 function Convert-AnfValueToBool {
     param([object]$Value)
 
@@ -390,30 +366,24 @@ function Resolve-AnfVolumeSizeProfile {
     $breakthroughMode = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('BreakthroughMode', 'breakthroughMode')
     $breakthroughModeEnabled = Convert-AnfValueToBool -Value $breakthroughMode
     $coolAccess = Convert-AnfValueToBool -Value (Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('CoolAccess', 'coolAccess'))
+    $profileSignal = "$largeVolumeType $breakthroughMode".Trim()
+    $isBreakthroughVolume = $isLargeVolume -and ($breakthroughModeEnabled -or $profileSignal -match "(?i)breakthrough")
 
     $profileName = "Regular"
-    if ($isLargeVolume) {
-        $profileName = $largeVolumeLimitMode
-        if ($profileName -eq "Auto") {
-            $profileSignal = "$largeVolumeType $breakthroughMode".Trim()
-            if ($profileSignal -match "(?i)extra|7\.2" -or ($coolAccess -and [double]$CurrentSizeGiB -gt [double]$breakthroughLargeVolumeMaximumSizeGiB)) {
-                $profileName = "ExtraLargeCoolAccess"
-            } elseif ($breakthroughModeEnabled -or $profileSignal -match "(?i)breakthrough" -or [double]$CurrentSizeGiB -gt [double]$largeVolumeMaximumSizeGiB) {
-                $profileName = "Breakthrough"
-            } else {
-                $profileName = "Large"
-            }
-        }
+    $isSupported = $true
+    $excludeReason = ""
+    if ($isBreakthroughVolume) {
+        $profileName = "Breakthrough"
+        $isSupported = $false
+        $excludeReason = "Breakthrough large volume is not supported by this script."
+    } elseif ($isLargeVolume) {
+        $profileName = "Large"
     }
 
     switch ($profileName) {
-        "ExtraLargeCoolAccess" {
-            $minimumSizeGiB = [double]$extraLargeCoolAccessVolumeMinimumSizeGiB
-            $maximumSizeGiB = [double]$extraLargeCoolAccessVolumeMaximumSizeGiB
-        }
         "Breakthrough" {
-            $minimumSizeGiB = [double]$breakthroughLargeVolumeMinimumSizeGiB
-            $maximumSizeGiB = [double]$breakthroughLargeVolumeMaximumSizeGiB
+            $minimumSizeGiB = [double]$CurrentSizeGiB
+            $maximumSizeGiB = [double]$CurrentSizeGiB
         }
         "Large" {
             $minimumSizeGiB = [double]$largeVolumeMinimumSizeGiB
@@ -437,6 +407,8 @@ function Resolve-AnfVolumeSizeProfile {
         LargeVolumeType = $largeVolumeType
         BreakthroughMode = $breakthroughMode
         CoolAccess = $coolAccess
+        IsSupported = $isSupported
+        ExcludeReason = $excludeReason
         MinimumSizeGiB = $minimumSizeGiB
         MaximumSizeGiB = $maximumSizeGiB
     }
@@ -1097,6 +1069,8 @@ foreach ($anfVolume in $anfVolumes) {
         IsLargeVolume = $volumeSizeProfile.IsLargeVolume
         LargeVolumeType = $volumeSizeProfile.LargeVolumeType
         VolumeLimitProfile = $volumeSizeProfile.ProfileName
+        ExcludedFromAutoscale = (-not $volumeSizeProfile.IsSupported)
+        ExcludeReason = $volumeSizeProfile.ExcludeReason
         MinimumSizeGiB = $volumeSizeProfile.MinimumSizeGiB
         MaximumSizeGiB = $volumeSizeProfile.MaximumSizeGiB
         CurrentSizeGiB = $currentVolumeSizeGiB
@@ -1111,6 +1085,10 @@ foreach ($anfVolume in $anfVolumes) {
         NewSizeGiB = $currentVolumeSizeGiB
         NewThroughputMibps = $currentThroughputMibps
         ResizeReason = ""
+    }
+
+    if ($volumeDataObject.ExcludedFromAutoscale) {
+        Write-Warning "Breakthrough large volume '$volumeName' found. Excluding it from capacity and throughput changes. Reason: $($volumeDataObject.ExcludeReason)"
     }
     
     $volumeData += $volumeDataObject
@@ -1136,6 +1114,11 @@ foreach ($volume in $volumeData) {
     Write-Output "    Free Space: $($volume.FreeSpaceGiB) GiB"
     Write-Output "    Utilization: $($volume.CurrentUtilizationPercent)%"
     Write-Output "    Volume Profile: $($volume.VolumeLimitProfile) (limits: $($volume.MinimumSizeGiB)-$($volume.MaximumSizeGiB) GiB)"
+
+    if ($volume.ExcludedFromAutoscale) {
+        Write-Warning "    Excluded from autoscale changes: $($volume.ExcludeReason)"
+        continue
+    }
     
     # Check if volume needs expansion (either threshold exceeded)
     $needsExpansion = ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) -or ($volume.FreeSpaceGiB -le $minimumFreeSpaceGiB)
@@ -1255,8 +1238,15 @@ if ($poolQosType -eq "Manual") {
     Write-Output ""
     Write-Output "Calculating QoS throughput allocation..."
     
-    # Get total minimum throughput requirements
-    $totalMinThroughput = ($volumeData | Measure-Object -Property MinThroughputMibps -Sum).Sum
+    $managedVolumeData = @($volumeData | Where-Object { -not $_.ExcludedFromAutoscale })
+    $excludedVolumeData = @($volumeData | Where-Object { $_.ExcludedFromAutoscale })
+    $excludedCurrentThroughput = ($excludedVolumeData | Measure-Object -Property CurrentThroughputMibps -Sum).Sum
+    if ($null -eq $excludedCurrentThroughput) { $excludedCurrentThroughput = 0 }
+
+    # Get total minimum throughput requirements for volumes this script can safely update.
+    $totalMinThroughput = ($managedVolumeData | Measure-Object -Property MinThroughputMibps -Sum).Sum
+    if ($null -eq $totalMinThroughput) { $totalMinThroughput = 0 }
+    $totalRequiredThroughput = $totalMinThroughput + $excludedCurrentThroughput
 
     if ($isFlexibleServiceLevel) {
         Write-Output "  Flexible service level: capacity and throughput are managed independently"
@@ -1264,51 +1254,47 @@ if ($poolQosType -eq "Manual") {
         Write-Output "  Minimum FSL pool throughput floor: $minimumPoolThroughputMibps MiB/s"
 
         $newPoolMaxThroughput = Convert-ToWholeThroughputMibps -Value ([math]::Max([double]$poolMaxThroughput, [double]$minimumPoolThroughputMibps)) -Minimum $minimumPoolThroughputMibps
-        if ($totalMinThroughput -gt $newPoolMaxThroughput) {
-            Write-Warning "Total minimum volume throughput ($totalMinThroughput MiB/s) exceeds current FSL pool throughput ($newPoolMaxThroughput MiB/s). The script will plan an FSL pool throughput increase before volume updates."
-            $newPoolMaxThroughput = Convert-ToWholeThroughputMibps -Value $totalMinThroughput -Minimum $minimumPoolThroughputMibps
+        if ($totalRequiredThroughput -gt $newPoolMaxThroughput) {
+            Write-Warning "Total required throughput ($totalRequiredThroughput MiB/s, including excluded volumes) exceeds current FSL pool throughput ($newPoolMaxThroughput MiB/s). The script will plan an FSL pool throughput increase before volume updates."
+            $newPoolMaxThroughput = Convert-ToWholeThroughputMibps -Value $totalRequiredThroughput -Minimum $minimumPoolThroughputMibps
         }
 
         $poolThroughputNeedsUpdate = $newPoolMaxThroughput -ne (Convert-ToWholeThroughputMibps -Value $poolMaxThroughput -Minimum 0)
         Write-Output "  Target FSL pool throughput: $newPoolMaxThroughput MiB/s"
     } else {
         # Classic manual QoS pool throughput tracks pool size. Flexible service level pools skip this calculation.
-        $currentPoolSizeTiBForCalc = [math]::Max($currentPoolSizeTiB, 0.1)  # Avoid division by zero
-        $calculatedThroughputPerTiB = $poolMaxThroughput / $currentPoolSizeTiBForCalc
-
-        # Apply max throughput per TiB limit (allows overriding the calculated ratio)
-        $effectiveThroughputPerTiB = [math]::Min($calculatedThroughputPerTiB, $maxThroughputPerTiB)
-        $newPoolMaxThroughput = [math]::Round($effectiveThroughputPerTiB * $optimalPoolSizeTiB, 0)
+        $classicThroughputPerTiB = Get-AnfClassicManualThroughputPerTiB -ServiceLevel $poolServiceLevel
+        $newPoolMaxThroughput = [math]::Round($classicThroughputPerTiB * $optimalPoolSizeTiB, 0)
 
         Write-Output "  Current pool throughput: $poolMaxThroughput MiB/s ($currentPoolSizeTiB TiB)"
-        Write-Output "  Calculated throughput per TiB: $([math]::Round($calculatedThroughputPerTiB, 1)) MiB/s"
-        Write-Output "  Max throughput per TiB limit: $maxThroughputPerTiB MiB/s"
-        Write-Output "  Effective throughput per TiB: $([math]::Round($effectiveThroughputPerTiB, 1)) MiB/s"
+        Write-Output "  Service level throughput per TiB: $classicThroughputPerTiB MiB/s ($poolServiceLevel)"
         Write-Output "  New pool throughput: $newPoolMaxThroughput MiB/s ($optimalPoolSizeTiB TiB)"
     }
 
-    $availableThroughput = $newPoolMaxThroughput - $totalMinThroughput
+    $availableThroughput = $newPoolMaxThroughput - $totalMinThroughput - $excludedCurrentThroughput
     
     if ($availableThroughput -lt 0) {
-        Write-Warning "Total minimum throughput ($totalMinThroughput MiB/s) exceeds new pool capacity ($newPoolMaxThroughput MiB/s)"
-        # Set all volumes to minimum throughput
-        foreach ($volume in $volumeData) {
+        Write-Warning "Total managed minimum throughput plus excluded volume throughput ($totalRequiredThroughput MiB/s) exceeds new pool capacity ($newPoolMaxThroughput MiB/s)"
+        foreach ($volume in $managedVolumeData) {
             $volume.NewThroughputMibps = $volume.MinThroughputMibps
         }
     } else {
         # Allocate throughput proportionally based on volume size, respecting minimums
-        foreach ($volume in $volumeData) {
-            if ($newTotalVolumeSize -gt 0) {
-                $proportionalThroughput = ($availableThroughput * ($volume.NewSizeGiB / $newTotalVolumeSize))
+        $managedNewTotalVolumeSize = ($managedVolumeData | Measure-Object -Property NewSizeGiB -Sum).Sum
+        if ($null -eq $managedNewTotalVolumeSize) { $managedNewTotalVolumeSize = 0 }
+        foreach ($volume in $managedVolumeData) {
+            if ($managedNewTotalVolumeSize -gt 0) {
+                $proportionalThroughput = ($availableThroughput * ($volume.NewSizeGiB / $managedNewTotalVolumeSize))
                 $volume.NewThroughputMibps = [math]::Round($volume.MinThroughputMibps + $proportionalThroughput, 0)
-                Write-Output "    Volume '$($volume.ShortName)': Size=$($volume.NewSizeGiB)GiB, Proportion=$([math]::Round($volume.NewSizeGiB / $newTotalVolumeSize, 3)), ProportionalTput=$([math]::Round($proportionalThroughput, 1))MiB/s, Total=$($volume.NewThroughputMibps)MiB/s"
+                Write-Output "    Volume '$($volume.ShortName)': Size=$($volume.NewSizeGiB)GiB, Proportion=$([math]::Round($volume.NewSizeGiB / $managedNewTotalVolumeSize, 3)), ProportionalTput=$([math]::Round($proportionalThroughput, 1))MiB/s, Total=$($volume.NewThroughputMibps)MiB/s"
             } else {
                 $volume.NewThroughputMibps = $volume.MinThroughputMibps
             }
         }
     }
     
-    Write-Output "  Total minimum throughput: $totalMinThroughput MiB/s"
+    Write-Output "  Total managed minimum throughput: $totalMinThroughput MiB/s"
+    Write-Output "  Reserved excluded volume throughput: $excludedCurrentThroughput MiB/s"
     Write-Output "  Available for allocation: $availableThroughput MiB/s"
 }
 
@@ -1343,7 +1329,7 @@ if ($poolQosType -eq "Manual") {
 $volumesNeedingQoSOnly = @()
 if ($poolQosType -eq "Manual") {
     foreach ($volume in $volumeData) {
-        if ($volume.NewThroughputMibps -ne $volume.CurrentThroughputMibps -and -not $volume.NeedsResize) {
+        if (-not $volume.ExcludedFromAutoscale -and $volume.NewThroughputMibps -ne $volume.CurrentThroughputMibps -and -not $volume.NeedsResize) {
             $volumesNeedingQoSOnly += $volume
         }
     }
@@ -1418,6 +1404,10 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
     # Resize volumes and update QoS
     foreach ($volume in $volumeData) {
         $volumeChanged = $false
+        if ($volume.ExcludedFromAutoscale) {
+            Write-Warning "Skipping excluded volume '$($volume.ShortName)': $($volume.ExcludeReason)"
+            continue
+        }
         
         # Resize volume if needed
         if ($volume.NeedsResize) {
