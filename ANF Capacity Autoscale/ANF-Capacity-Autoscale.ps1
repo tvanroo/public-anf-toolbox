@@ -36,8 +36,6 @@ This script is designed to run as an Azure Automation Account runbook with the f
 Azure Automation Account Setup Requirements:
 1. REQUIRED MODULES (install in Automation Account):
    - Az.Accounts (4.0.0 or later)
-   - Az.NetAppFiles (0.15.0 or later)
-   - Az.Monitor (4.0.0 or later)
 
 2. REQUIRED RBAC PERMISSIONS for Managed Identity:
    - NetApp Contributor role on the Resource Group containing ANF resources
@@ -98,8 +96,6 @@ Azure Automation Account Setup Requirements:
 # Azure Automation Account runbook for ANF Capacity Management
 # Required Azure PowerShell modules (install in Automation Account):
 # - Az.Accounts
-# - Az.NetAppFiles  
-# - Az.Monitor
 
 # Check if running in Azure Automation Account
 $runningInAutomation = $false
@@ -110,22 +106,13 @@ if ($env:AUTOMATION_ASSET_ACCOUNTID) {
 
 # Import required Azure PowerShell modules
 Write-Output "Loading required Azure PowerShell modules..."
-$requiredModules = @('Az.Accounts', 'Az.NetAppFiles', 'Az.Monitor')
+$requiredModules = @('Az.Accounts')
 
 foreach ($module in $requiredModules) {
     try {
         Import-Module $module -Force -ErrorAction Stop
         $moduleInfo = Get-Module $module
         Write-Output "Successfully imported module: $module (Version: $($moduleInfo.Version))"
-        
-        # Check for minimum required version for ANF Flexible service level
-        if ($module -eq 'Az.NetAppFiles') {
-            $minimumVersion = [Version]"0.15.0"  # Version that supports 2024-07-01-preview API
-            if ($moduleInfo.Version -lt $minimumVersion) {
-                Write-Warning "Az.NetAppFiles version $($moduleInfo.Version) may not support Flexible service level pools."
-                Write-Warning "Consider updating: Update-Module Az.NetAppFiles -Force"
-            }
-        }
     } catch {
         Write-Error "Failed to import module $module. Please ensure it's installed: Install-Module $module -Force"
         throw "Required module $module is not available"
@@ -488,6 +475,7 @@ function Invoke-AnfArmJson {
         [Parameter(Mandatory=$true)][string]$Method,
         [Parameter(Mandatory=$true)][string]$ResourceId,
         [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$QueryString = "",
         [Parameter()][string]$BodyJson
     )
 
@@ -503,7 +491,17 @@ function Invoke-AnfArmJson {
         "$resourceManagerUrl/"
     ).AccessToken
 
-    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion"
+    $normalizedQueryString = ""
+    if ($QueryString) {
+        $normalizedQueryString = "$QueryString"
+        if ($normalizedQueryString.StartsWith("?")) {
+            $normalizedQueryString = "&$($normalizedQueryString.Substring(1))"
+        } elseif (-not $normalizedQueryString.StartsWith("&")) {
+            $normalizedQueryString = "&$normalizedQueryString"
+        }
+    }
+
+    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion$normalizedQueryString"
     $headers = @{
         'Authorization' = "Bearer $token"
         'Content-Type' = 'application/json'
@@ -514,6 +512,54 @@ function Invoke-AnfArmJson {
     }
 
     return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+}
+
+function Get-AnfAccount {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName"
+    $account = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($account -and $account.error) {
+        throw "ANF account REST API returned error for $ResourceGroupName/$AccountName. code='$($account.error.code)' message='$($account.error.message)'"
+    }
+
+    if (-not $account -or -not $account.id) {
+        throw "Unable to parse ANF account REST response for $ResourceGroupName/$AccountName."
+    }
+
+    return $account
+}
+
+function Get-AnfMetricAverageValues {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$MetricName,
+        [Parameter(Mandatory=$true)][double]$LookBackHours
+    )
+
+    $endTimeUtc = (Get-Date).ToUniversalTime()
+    $startTimeUtc = $endTimeUtc.AddHours(-$LookBackHours)
+    $timespan = "{0:o}/{1:o}" -f $startTimeUtc, $endTimeUtc
+    $queryString = "&metricnames=$([uri]::EscapeDataString($MetricName))&timespan=$([uri]::EscapeDataString($timespan))&interval=PT1H&aggregation=Average"
+    $metricsResourceId = "$ResourceId/providers/microsoft.insights/metrics"
+    $metricsResponse = Invoke-AnfArmJson -Method "GET" -ResourceId $metricsResourceId -ApiVersion "2018-01-01" -QueryString $queryString
+
+    $averages = @()
+    foreach ($metric in @($metricsResponse.value)) {
+        foreach ($timeSeries in @($metric.timeseries)) {
+            foreach ($dataPoint in @($timeSeries.data)) {
+                if ($null -ne $dataPoint.average) {
+                    $averages += [double]$dataPoint.average
+                }
+            }
+        }
+    }
+
+    return $averages
 }
 
 function Get-AnfRestErrorDetails {
@@ -708,16 +754,6 @@ function Update-AnfPoolSize {
         [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
     )
 
-    if (-not $IsFlexibleServiceLevel) {
-        try {
-            $null = Update-AzNetAppFilesPool -ResourceGroupName $ResourceGroupName -AccountName $AccountName -Name $PoolName -PoolSize $TargetSizeBytes -ErrorAction Stop
-            Write-Output "Pool resize completed successfully using PowerShell cmdlet"
-            return
-        } catch {
-            Write-Warning "PowerShell pool resize failed, attempting REST API fallback: $($_.Exception.Message)"
-        }
-    }
-
     $context = Get-AzContext -ErrorAction Stop
     $poolResourceId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName/capacityPools/$PoolName"
     $poolSizeApiVersion = if ($IsFlexibleServiceLevel) { "2024-07-01-preview" } else { $anfApiVersion }
@@ -796,16 +832,6 @@ function Update-AnfVolumeCapacity {
         [Parameter(Mandatory=$true)][bool]$IsFlexibleServiceLevel
     )
 
-    if (-not $IsFlexibleServiceLevel) {
-        try {
-            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -Name $VolumeName -ErrorAction Stop
-            $null = $anfVolume | Update-AzNetAppFilesVolume -UsageThreshold $TargetSizeBytes -ErrorAction Stop
-            return
-        } catch {
-            Write-Warning "PowerShell volume resize failed for '$VolumeName', attempting REST API fallback: $($_.Exception.Message)"
-        }
-    }
-
     $body = @{
         properties = @{
             usageThreshold = $TargetSizeBytes
@@ -827,15 +853,6 @@ function Update-AnfVolumeThroughput {
     )
 
     $targetWholeMibps = Convert-ToWholeThroughputMibps -Value $TargetThroughputMibps -Minimum 1
-    if (-not $IsFlexibleServiceLevel) {
-        try {
-            $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName -Name $VolumeName -ErrorAction Stop
-            $null = $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $targetWholeMibps -ErrorAction Stop
-            return
-        } catch {
-            Write-Warning "PowerShell throughput update failed for '$VolumeName', attempting REST API fallback: $($_.Exception.Message)"
-        }
-    }
 
     $body = @{
         properties = @{
@@ -934,7 +951,7 @@ try {
 # Get the Azure NetApp Files account details
 Write-Output "Connecting to ANF Account: $anfAccountName..."
 try {
-    $anfAccount = Get-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -ErrorAction Stop
+    $anfAccount = Get-AnfAccount -ResourceGroupName $resourceGroupName -AccountName $anfAccountName
     Write-Output "Successfully connected to ANF Account: $anfAccountName"
 } catch {
     Write-Error "Failed to connect to ANF Account: $anfAccountName. $_"
@@ -1003,38 +1020,7 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
         
         if ($errorMessage -like "*timeout*" -or $errorMessage -like "*canceled*") {
             Write-Warning "Volume retrieval timed out (attempt $retryCount of $maxRetries): $errorMessage"
-            
-            # Try REST API as fallback on last retry
-            if ($retryCount -eq $maxRetries) {
-                Write-Output "Attempting REST API fallback for volume retrieval..."
-                try {
-                    # Get access token
-                    $context = Get-AzContext
-                    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id, $null, "Never", $null, "https://management.azure.com/").AccessToken
-                    
-                    # Construct REST API URL
-                    $subscriptionId = $context.Subscription.Id
-                    $apiVersion = $anfApiVersion
-                    $uri = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName/volumes?api-version=$apiVersion"
-                    
-                    $headers = @{
-                        'Authorization' = "Bearer $token"
-                        'Content-Type' = 'application/json'
-                    }
-                    
-                    # Make REST API call with custom timeout
-                    $restResponse = Invoke-RestMethod -Uri $uri -Method GET -Headers $headers -TimeoutSec 180 -ErrorAction Stop
-                    
-                    if ($restResponse.value) {
-                        Write-Output "Successfully retrieved $($restResponse.value.Count) volume(s) using REST API"
-                        $anfVolumes = @($restResponse.value | ForEach-Object { Convert-AnfRestVolume -Volume $_ })
-                        break
-                    }
-                } catch {
-                    Write-Warning "REST API fallback also failed: $($_.Exception.Message)"
-                }
-            }
-            
+
             if ($retryCount -lt $maxRetries) {
                 Write-Output "Retrying with longer timeout..."
                 continue
@@ -1067,16 +1053,16 @@ foreach ($anfVolume in $anfVolumes) {
     # Get current capacity metrics
     try {
         # Get VolumeLogicalSize metric (actual consumed space)
-        $consumedSizeMetric = Get-AzMetric -ResourceId $anfVolume.Id -MetricName 'VolumeLogicalSize' -StartTime $(Get-Date).AddHours(-$capacityLookBackHours) -EndTime $(Get-Date) -TimeGrain 01:00:00 -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-        $avgConsumedSizeBytes = if ($consumedSizeMetric.Data) { 
-            ($consumedSizeMetric.Data | Where-Object { $_.Average -ne $null } | Measure-Object -Property Average -Average).Average 
+        $consumedSizeMetricAverages = @(Get-AnfMetricAverageValues -ResourceId $anfVolume.Id -MetricName 'VolumeLogicalSize' -LookBackHours $capacityLookBackHours)
+        $avgConsumedSizeBytes = if ($consumedSizeMetricAverages.Count -gt 0) {
+            ($consumedSizeMetricAverages | Measure-Object -Average).Average
         } else { 
             0 
         }
         
         # Get maximum consumed size in the lookback period
-        $maxConsumedSizeBytes = if ($consumedSizeMetric.Data) { 
-            ($consumedSizeMetric.Data | Where-Object { $_.Average -ne $null } | Measure-Object -Property Average -Maximum).Maximum 
+        $maxConsumedSizeBytes = if ($consumedSizeMetricAverages.Count -gt 0) {
+            ($consumedSizeMetricAverages | Measure-Object -Maximum).Maximum
         } else { 
             0 
         }
