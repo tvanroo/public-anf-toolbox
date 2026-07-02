@@ -1,0 +1,137 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "[concat('ANF-QoS-Performance-', take(uniqueString(resourceGroup().id, deployment().name), 6))]",
+      "metadata": {
+        "description": "Automation Account name. Change this if the name already exists in the deployment resource group, or clear it to generate a unique name."
+      }
+    },
+    "capacityPoolResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full Resource ID of the initial Azure NetApp Files capacity pool. After deployment, edit the ANF_CapacityPoolResourceId Automation variable to add more pool IDs if needed."
+      }
+    },
+    "testMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = preview only. No = apply live QoS conversion and volume throughput changes."
+      }
+    },
+    "minimumThroughputPerVolume": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minimum throughput floor in MiB/s assigned to every managed volume."
+      }
+    },
+    "throughputLookBackHours": {
+      "type": "int",
+      "defaultValue": 168,
+      "minValue": 1,
+      "metadata": {
+        "description": "Lookback window in hours for TotalThroughput metrics used to weight the volume throughput allocation."
+      }
+    },
+    "convertToManualMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = convert classic Auto QoS pools to Manual QoS before applying explicit volume throughput. In test mode this is only reported."
+      }
+    },
+    "scheduleStartDelayMinutes": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minutes from deployment time until the first scheduled run starts."
+      }
+    },
+    "runbookScriptUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-performance-modernization/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1",
+      "metadata": {
+        "description": "Source URL of the runbook script file to import and publish."
+      }
+    }
+  },
+  "variables": {
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-performance-modernization/ANF%20QoS%20Performance/deploy/azuredeploy.json",
+    "editableTestModeVariable": "ANF_TestMode",
+    "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId",
+    "editableMinimumThroughputVariable": "ANF_MinimumThroughputPerVolume",
+    "editableThroughputLookBackVariable": "ANF_ThroughputLookBackHours"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "anf-qos-performance-gov",
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[variables('sharedTemplateUri')]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "automationAccountName": {
+            "value": "[parameters('automationAccountName')]"
+          },
+          "capacityPoolResourceId": {
+            "value": "[parameters('capacityPoolResourceId')]"
+          },
+          "testMode": {
+            "value": "[parameters('testMode')]"
+          },
+          "minimumThroughputPerVolume": {
+            "value": "[parameters('minimumThroughputPerVolume')]"
+          },
+          "throughputLookBackHours": {
+            "value": "[parameters('throughputLookBackHours')]"
+          },
+          "convertToManualMode": {
+            "value": "[parameters('convertToManualMode')]"
+          },
+          "scheduleStartDelayMinutes": {
+            "value": "[parameters('scheduleStartDelayMinutes')]"
+          },
+          "runbookScriptUri": {
+            "value": "[parameters('runbookScriptUri')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "testModeVariable": {
+      "type": "string",
+      "value": "[variables('editableTestModeVariable')]"
+    },
+    "capacityPoolResourceIdVariable": {
+      "type": "string",
+      "value": "[variables('editableCapacityPoolResourceIdVariable')]"
+    },
+    "minimumThroughputVariable": {
+      "type": "string",
+      "value": "[variables('editableMinimumThroughputVariable')]"
+    },
+    "throughputLookBackVariable": {
+      "type": "string",
+      "value": "[variables('editableThroughputLookBackVariable')]"
+    }
+  }
+}
