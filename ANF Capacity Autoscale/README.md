@@ -24,6 +24,36 @@ The standard ARM deployment experience still provides subscription and resource 
 
 The deployer must be allowed to deploy into the target ANF account resource group and create role assignments at the target ANF account scope, for example through Owner or User Access Administrator permissions plus deployment rights on that resource group. Without `Microsoft.Authorization/roleAssignments/write` on that target scope, the Automation Account can still be created but automatic RBAC assignment will fail.
 
+## Post-deployment variable changes
+
+After deployment, open the Automation Account in Azure Portal and go to **Shared Resources** > **Variables**. These `ANF_*` variables are the post-install configuration surface for the runbook.
+
+![Azure Automation variables for ANF Capacity Autoscale](media/automation-variables.png)
+
+The three green-highlighted variables in the screenshot are the ones most users are likely to edit after the first deployment:
+
+| Variable | Impact |
+| --- | --- |
+| `ANF_TestMode` | Deployment defaults this to `Yes`, which previews decisions and writes no pool, volume, or throughput changes. `ANF_TestMode` must be changed to `No` before the runbook applies any changes. Set it back to `Yes` when you want to preview the impact of a policy change before allowing writes again. |
+| `ANF_MinimumFreeSpaceGiB` | Controls the free-space buffer. A volume expands when its free space is at or below this value, and a volume contraction target is calculated as max observed consumed size plus this value. Higher values keep more spare capacity in each volume; lower values keep volumes tighter. |
+| `ANF_CapacityLookBackHours` | Controls how far back the runbook queries `VolumeLogicalSize` metrics. The script uses the maximum observed consumed size in this window. A shorter window reacts faster to recent changes; a longer window is more conservative when consumption is bursty. |
+
+Other editable variables:
+
+| Variable | Impact |
+| --- | --- |
+| `ANF_CapacityPoolResourceId` | Target pool configuration. The deployment interface still asks for one capacity pool Resource ID. After deployment, edit this variable to add more pools and separate multiple IDs with new lines, semicolons, or commas. |
+| `ANF_CapacityResizeThreshold` | Percentage utilization trigger for expansion. If max observed consumed size reaches this percentage of the current volume size, the volume is considered for expansion. |
+| `ANF_MinimumVolumeGrowthPercent` | Minimum percentage growth applied when a volume expands. The default `0` allows the free-space calculation to drive the target directly. |
+| `ANF_MaximumVolumeGrowthPercent` | Maximum percentage growth allowed in one run. The default is intentionally very high, effectively allowing the calculated target unless you lower it. |
+| `ANF_VolumeMinThroughputMap` | JSON map of volume name to minimum MiB/s. On classic Manual QoS pools it influences proportional allocation. On Flexible Service Level pools it can cause a pool throughput increase when the managed and excluded volume requirements exceed current pool throughput. |
+| `ANF_LargeVolumeMaximumSizeGiB` | Maximum-size guard for existing large volumes. It defaults to 1048576 GiB (1 PiB) and can be raised after deployment in regions that support larger limits. |
+| `ANF_TenantId` | Tenant used for authentication. The deploy template sets this from the deployment context; change it only if the runbook must authenticate against a different tenant. |
+
+Each capacity pool is processed independently. For every configured pool, the runbook re-reads the subscription, resource group, ANF account, pool, service level, QoS type, throughput, volume list, and volume metrics before calculating changes. There is no capacity, throughput, service-level, or volume math shared across pools. The policy variables above are shared across all pools in the same Automation Account; deploy a second Automation Account when different pools need different resize or throughput policy.
+
+The initial deployment assigns the Automation Account managed identity to the ANF account parsed from the Resource ID entered during deployment. If you later add pool Resource IDs from other ANF accounts or subscriptions, grant that same managed identity `Azure NetApp Files Administrator` and `Monitoring Reader` on each additional target ANF account before expecting those pools to run successfully.
+
 ## Flexible Service Level behavior
 
 - The main capacity autoscale script now detects the capacity pool service level before planning changes.
@@ -47,8 +77,8 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 | Setting | Default | Used for |
 | --- | --- | --- |
 | `ANF_TenantId` | placeholder | Optional tenant selection. |
-| `ANF_CapacityPoolResourceId` | required | Target capacity pool Resource ID. The script derives subscription, resource group, ANF account, and pool from this value. |
-| `ANF_TestMode` | `Yes` | `Yes` previews only; `No` applies changes. |
+| `ANF_CapacityPoolResourceId` | required | One or more target capacity pool Resource IDs. The script derives subscription, resource group, ANF account, and pool from each value. |
+| `ANF_TestMode` | `Yes` | `Yes` previews only; `No` applies changes. This must be `No` before any resize or throughput updates are written. |
 | `ANF_CapacityResizeThreshold` | `99` | Expands a volume when max observed utilization is at or above this percent. |
 | `ANF_MinimumFreeSpaceGiB` | `256` | Expands a volume when free space is at or below this value; also sizes expansion/contraction targets. |
 | `ANF_MinimumVolumeGrowthPercent` | `0` | Minimum percent growth when expanding a volume. |

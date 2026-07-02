@@ -50,7 +50,7 @@ Azure Automation Account Setup Requirements:
 
    Required target settings:
    - ANF_TenantId: Azure Tenant ID (string)
-   - ANF_CapacityPoolResourceId: Capacity pool Resource ID (string) - REQUIRED
+   - ANF_CapacityPoolResourceId: One or more capacity pool Resource IDs separated by new lines, semicolons, or commas (string) - REQUIRED
 
    Capacity decision settings:
    - ANF_CapacityResizeThreshold: Resize threshold percent (int, default: 99)
@@ -66,6 +66,8 @@ Azure Automation Account Setup Requirements:
      Example: '{"vol1":10,"vol2":15,"vol3":5}' - sets minimum MiB/s per volume
 
 4. VOLUME EXPANSION/CONTRACTION LOGIC:
+   - When multiple capacity pool Resource IDs are configured, each pool is processed independently.
+   - Service level, QoS type, pool capacity, pool throughput, volume list, and metrics are re-read for every pool.
    - Expands volume if utilization % OR absolute GiB threshold is exceeded
    - Contracts volumes to max observed consumed size plus configured free space when they are oversized.
    - Pool automatically resizes in TiB increments for maximum cost efficiency
@@ -163,6 +165,31 @@ function Resolve-AnfCapacityPoolResourceId {
     }
 }
 
+function Resolve-AnfCapacityPoolResourceIds {
+    param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceIds)
+
+    $tokens = @("$CapacityPoolResourceIds" -split '[\r\n;,]+' | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($tokens.Count -eq 0) {
+        throw "ANF_CapacityPoolResourceId must contain at least one capacity pool Resource ID."
+    }
+
+    $targets = @()
+    $seenResourceIds = @{}
+    foreach ($token in $tokens) {
+        $target = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $token
+        $dedupeKey = $target.CapacityPoolResourceId.ToLowerInvariant()
+        if ($seenResourceIds.ContainsKey($dedupeKey)) {
+            Write-Warning "Duplicate capacity pool Resource ID ignored: $($target.CapacityPoolResourceId)"
+            continue
+        }
+
+        $seenResourceIds[$dedupeKey] = $true
+        $targets += $target
+    }
+
+    return @($targets)
+}
+
 function Convert-AnfJsonObjectToHashtable {
     param([object]$InputObject)
 
@@ -189,18 +216,14 @@ function Convert-AnfJsonObjectToHashtable {
     # Get variables from Automation Account, Cloud Shell environment variables, or defaults
     $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     $capacityPoolResourceId = Get-AnfSetting -Name "ANF_CapacityPoolResourceId"
+    $anfTargets = @()
     $subscriptionId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     $resourceGroupName = "example-rg"
     $anfAccountName = "example-anf-acct"
     $anfPoolName = "example-anf-pool"
 
     if ($capacityPoolResourceId) {
-        $anfTarget = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $capacityPoolResourceId
-        $subscriptionId = $anfTarget.SubscriptionId
-        $resourceGroupName = $anfTarget.ResourceGroupName
-        $anfAccountName = $anfTarget.AccountName
-        $anfPoolName = $anfTarget.PoolName
-        $capacityPoolResourceId = $anfTarget.CapacityPoolResourceId
+        $anfTargets = @(Resolve-AnfCapacityPoolResourceIds -CapacityPoolResourceIds $capacityPoolResourceId)
     } else {
         # Legacy fallback for manual testing with older environment variables.
         $subscriptionId = Get-AnfSetting -Name "ANF_SubscriptionId" -Default $subscriptionId
@@ -209,7 +232,17 @@ function Convert-AnfJsonObjectToHashtable {
         $anfPoolName = Get-AnfSetting -Name "ANF_PoolName" -Default $anfPoolName
         if ($subscriptionId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -and $resourceGroupName -ne "example-rg" -and $anfAccountName -ne "example-anf-acct" -and $anfPoolName -ne "example-anf-pool") {
             $capacityPoolResourceId = "/subscriptions/$subscriptionId/resourceGroups/$resourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$anfAccountName/capacityPools/$anfPoolName"
+            $anfTargets = @(Resolve-AnfCapacityPoolResourceIds -CapacityPoolResourceIds $capacityPoolResourceId)
         }
+    }
+
+    if ($anfTargets.Count -gt 0) {
+        $primaryAnfTarget = $anfTargets[0]
+        $subscriptionId = $primaryAnfTarget.SubscriptionId
+        $resourceGroupName = $primaryAnfTarget.ResourceGroupName
+        $anfAccountName = $primaryAnfTarget.AccountName
+        $anfPoolName = $primaryAnfTarget.PoolName
+        $capacityPoolResourceId = $primaryAnfTarget.CapacityPoolResourceId
     }
     
     # Capacity Management Settings (can be overridden with Automation Variables)
@@ -260,11 +293,14 @@ function Convert-AnfJsonObjectToHashtable {
 Write-Output "=== ANF Capacity Autoscale Configuration ==="
 Write-Output "Execution Mode: $(if ($runningInAutomation) { 'Azure Automation Account' } else { 'Local/Manual Execution' })"
 Write-Output "Tenant ID: $tenantId"
-Write-Output "Capacity Pool Resource ID: $capacityPoolResourceId"
-Write-Output "Subscription ID: $subscriptionId"
-Write-Output "Resource Group: $resourceGroupName"
-Write-Output "ANF Account: $anfAccountName" 
-Write-Output "ANF Pool: $anfPoolName"
+Write-Output "Capacity Pool Targets: $($anfTargets.Count)"
+foreach ($anfTarget in $anfTargets) {
+    Write-Output "  - $($anfTarget.CapacityPoolResourceId)"
+}
+Write-Output "Primary Subscription ID: $subscriptionId"
+Write-Output "Primary Resource Group: $resourceGroupName"
+Write-Output "Primary ANF Account: $anfAccountName"
+Write-Output "Primary ANF Pool: $anfPoolName"
 Write-Output "Capacity Resize Threshold: $capacityResizeThreshold%"
 Write-Output "Minimum Free Space: $minimumFreeSpaceGiB GiB"
 Write-Output "Capacity Lookback Hours: $capacityLookBackHours"
@@ -286,7 +322,7 @@ if ($testMode -eq "Yes") {
 }
 
 # Validate required variables
-if (-not $capacityPoolResourceId) {
+if (-not $capacityPoolResourceId -or $anfTargets.Count -eq 0) {
     Write-Error "ANF_CapacityPoolResourceId must be set before running this script"
     throw "Missing required variable: ANF_CapacityPoolResourceId"
 }
@@ -968,6 +1004,33 @@ try {
     throw "Authentication failed"
 }
 
+$failedCapacityPools = @()
+foreach ($anfTarget in $anfTargets) {
+try {
+    $capacityPoolResourceId = $anfTarget.CapacityPoolResourceId
+    $subscriptionId = $anfTarget.SubscriptionId
+    $resourceGroupName = $anfTarget.ResourceGroupName
+    $anfAccountName = $anfTarget.AccountName
+    $anfPoolName = $anfTarget.PoolName
+
+    Write-Output ""
+    Write-Output ("=" * 100)
+    Write-Output "Processing capacity pool: $capacityPoolResourceId"
+    Write-Output "Target subscription: $subscriptionId"
+    Write-Output "Target resource group: $resourceGroupName"
+    Write-Output "Target ANF account: $anfAccountName"
+    Write-Output "Target capacity pool: $anfPoolName"
+
+    try {
+        Write-Output "Setting subscription context to target pool subscription: $subscriptionId"
+        $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+        $updatedContext = Get-AzContext
+        Write-Output "Successfully set target subscription context: $($updatedContext.Subscription.Name) ($($updatedContext.Subscription.Id))"
+    } catch {
+        Write-Error "Failed to set subscription context for capacity pool $capacityPoolResourceId. $_"
+        throw "Subscription context failed for capacity pool $capacityPoolResourceId"
+    }
+
 # Get the Azure NetApp Files account details
 Write-Output "Connecting to ANF Account: $anfAccountName..."
 try {
@@ -1014,8 +1077,9 @@ Write-Output "Pool details: ResourceGroup=$resourceGroupName, Account=$anfAccoun
 $anfVolumes = $null
 $maxRetries = 3
 $retryCount = 0
+$volumeRetrievalCompleted = $false
 
-while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
+while ($retryCount -lt $maxRetries -and -not $volumeRetrievalCompleted) {
     try {
         if ($retryCount -gt 0) {
             Write-Output "Retry attempt $retryCount of $($maxRetries - 1)..."
@@ -1029,11 +1093,16 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
         $startTime = Get-Date
         $anfVolumes = Get-AnfVolumes -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
         $elapsed = (Get-Date) - $startTime
+        $volumeRetrievalCompleted = $true
+        $volumeCount = if ($null -eq $anfVolumes) { 0 } else { @($anfVolumes).Count }
         
-        if ($anfVolumes) {
-            Write-Output "Successfully retrieved $($anfVolumes.Count) volume(s) in $($elapsed.TotalSeconds) seconds"
+        Write-Output "Successfully retrieved $volumeCount volume(s) in $($elapsed.TotalSeconds) seconds"
+        if ($volumeCount -eq 0) {
+            Write-Output "Capacity pool '$anfPoolName' currently has no volumes; skipping this pool."
             break
         }
+
+        break
     } catch {
         $retryCount++
         $errorMessage = $_.Exception.Message
@@ -1055,10 +1124,10 @@ while ($retryCount -lt $maxRetries -and -not $anfVolumes) {
 }
 
 # Check if volumes exist
-if (-not $anfVolumes) {
+if ($null -eq $anfVolumes -or @($anfVolumes).Count -eq 0) {
     Write-Warning "No volumes found in Azure NetApp Files Capacity Pool '$anfPoolName'"
     Write-Output "Script completed - no volumes to process"
-    return
+    continue
 }
 
 Write-Output "Found $($anfVolumes.Count) volume(s) in pool"
@@ -1594,6 +1663,24 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
 } else {
     Write-Output ""
     Write-Output "No capacity or QoS changes needed at this time"
+}
+
+Write-Output ""
+Write-Output "Capacity pool processing completed: $capacityPoolResourceId"
+} catch {
+    $failureMessage = $_.Exception.Message
+    $failedCapacityPools += [PSCustomObject]@{
+        CapacityPoolResourceId = $capacityPoolResourceId
+        Error = $failureMessage
+    }
+    Write-Warning "Capacity pool processing failed for $capacityPoolResourceId. Error: $failureMessage"
+    continue
+}
+}
+
+if ($failedCapacityPools.Count -gt 0) {
+    Write-Error "One or more capacity pools failed: $($failedCapacityPools.CapacityPoolResourceId -join ', ')"
+    throw "Capacity pool processing failed for $($failedCapacityPools.Count) target(s)"
 }
 
 Write-Output ""

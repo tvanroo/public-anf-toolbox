@@ -12,7 +12,7 @@
     "capacityPoolResourceId": {
       "type": "string",
       "metadata": {
-        "description": "Full Resource ID of the target Azure NetApp Files capacity pool. Example: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
+        "description": "Full Resource ID of the initial Azure NetApp Files capacity pool. After deployment, edit the ANF_CapacityPoolResourceId Automation variable to add more pool IDs if needed."
       }
     },
     "testMode": {
@@ -251,7 +251,7 @@
       ],
       "properties": {
         "isEncrypted": false,
-        "description": "Full Resource ID of the target Azure NetApp Files capacity pool.",
+        "description": "One or more full Resource IDs of target Azure NetApp Files capacity pools. Separate multiple IDs with new lines, semicolons, or commas.",
         "value": "[concat('\"', parameters('capacityPoolResourceId'), '\"')]"
       }
     },

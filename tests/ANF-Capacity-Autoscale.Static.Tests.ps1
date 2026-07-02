@@ -6,6 +6,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Capacity-Autoscale.ps1'
 $legacySimpleScriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Simple-Capacity-Autoscale.ps1'
 $readmePath = Join-Path $repoRoot 'ANF Capacity Autoscale/README.md'
+$automationVariablesImagePath = Join-Path $repoRoot 'ANF Capacity Autoscale/media/automation-variables.png'
 $deployPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy.json'
 $deployGovPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy-gov.json'
 $deployGovBadgePath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/deploytoazuregov.svg'
@@ -17,6 +18,10 @@ $deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Cont
 
 if (Test-Path -LiteralPath $legacySimpleScriptPath) {
     throw 'Expected the old ANF-Simple-Capacity-Autoscale.ps1 script to be removed after main promotion.'
+}
+
+if (-not (Test-Path -LiteralPath $automationVariablesImagePath)) {
+    throw 'Expected README Automation variables screenshot to exist at ANF Capacity Autoscale/media/automation-variables.png.'
 }
 
 function Assert-Contains {
@@ -65,6 +70,13 @@ Assert-Contains -Haystack $scriptText -Needle 'function Convert-AnfJsonObjectToH
 Assert-NotContains -Haystack $scriptText -Needle 'ConvertFrom-Json -AsHashtable' -Message 'Expected script not to use ConvertFrom-Json -AsHashtable because Azure Automation Windows PowerShell rejects it.'
 Assert-Contains -Haystack $scriptText -Needle 'Get-AnfSetting -Name "ANF_CapacityPoolResourceId"' -Message 'Expected target capacity pool to be configured by a single Resource ID setting.'
 Assert-Contains -Haystack $scriptText -Needle 'function Resolve-AnfCapacityPoolResourceId' -Message 'Expected helper to parse capacity pool Resource ID into subscription, resource group, account, and pool names.'
+Assert-Contains -Haystack $scriptText -Needle 'function Resolve-AnfCapacityPoolResourceIds' -Message 'Expected helper to parse one or more capacity pool Resource IDs from the same Automation variable.'
+Assert-Contains -Haystack $scriptText -Needle '-split ''[\r\n;,]+''' -Message 'Expected multiple capacity pool IDs to be split on new lines, semicolons, or commas for post-deployment configuration.'
+Assert-Contains -Haystack $scriptText -Needle 'foreach ($anfTarget in $anfTargets)' -Message 'Expected runbook to process each configured capacity pool independently.'
+Assert-Contains -Haystack $scriptText -Needle 'Processing capacity pool: $capacityPoolResourceId' -Message 'Expected per-pool log boundary before independent calculations.'
+Assert-Contains -Haystack $scriptText -Needle '$volumeRetrievalCompleted = $false' -Message 'Expected volume retrieval loop to track successful empty-list responses separately from retry failures.'
+Assert-Contains -Haystack $scriptText -Needle '$volumeCount = if ($null -eq $anfVolumes) { 0 } else { @($anfVolumes).Count }' -Message 'Expected empty volume lists to be counted as a successful retrieval.'
+Assert-NotContains -Haystack $scriptText -Needle 'while ($retryCount -lt $maxRetries -and -not $anfVolumes)' -Message 'Expected volume retrieval loop not to retry forever when a pool has zero volumes.'
 Assert-Contains -Haystack $scriptText -Needle 'CapacityPoolResourceId = $normalizedResourceId' -Message 'Expected parsed capacity pool Resource ID to be retained in target metadata.'
 Assert-Contains -Haystack $scriptText -Needle 'function New-AnfResourceId' -Message 'Expected ANF REST resource IDs to be built from explicit target subscription and resource group values.'
 Assert-Contains -Haystack $scriptText -Needle 'Get-AnfAccount -SubscriptionId $subscriptionId' -Message 'Expected ANF account lookup to use the parsed target subscription ID.'
@@ -119,9 +131,12 @@ Assert-Contains -Haystack $readmeText -Needle 'deploy/deploytoazuregov.svg' -Mes
 Assert-Contains -Haystack $readmeText -Needle 'public-anf-toolbox%2Fmain%2FANF%2520Capacity%2520Autoscale%2Fdeploy%2Fazuredeploy.json' -Message 'Expected commercial deploy button to point at the main branch template.'
 Assert-Contains -Haystack $deployText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1' -Message 'Expected commercial deploy template to import the runbook from main.'
 Assert-Contains -Haystack $deployGovText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json' -Message 'Expected Azure Gov wrapper to link the main branch shared template.'
-Assert-NotContains -Haystack $readmeText -Needle 'codex%2Fwip-anf-capacity-autoscale-fsl' -Message 'Expected README deploy buttons not to point at the WIP branch after main promotion.'
-Assert-NotContains -Haystack $deployText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected commercial deploy template not to point at the WIP branch after main promotion.'
-Assert-NotContains -Haystack $deployGovText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected Azure Gov deploy template not to point at the WIP branch after main promotion.'
+Assert-NotContains -Haystack $readmeText -Needle 'codex%2Fanf-capacity-multipool-config' -Message 'Expected README deploy buttons not to point at the multipool WIP branch after promotion.'
+Assert-NotContains -Haystack $deployText -Needle 'codex/anf-capacity-multipool-config' -Message 'Expected commercial deploy template not to point at the multipool WIP branch after promotion.'
+Assert-NotContains -Haystack $deployGovText -Needle 'codex/anf-capacity-multipool-config' -Message 'Expected Azure Gov deploy template not to point at the multipool WIP branch after promotion.'
+Assert-NotContains -Haystack $readmeText -Needle 'codex%2Fwip-anf-capacity-autoscale-fsl' -Message 'Expected README deploy buttons not to point at the previous Capacity Autoscale WIP branch.'
+Assert-NotContains -Haystack $deployText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected commercial deploy template not to point at the previous Capacity Autoscale WIP branch.'
+Assert-NotContains -Haystack $deployGovText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected Azure Gov deploy template not to point at the previous Capacity Autoscale WIP branch.'
 Assert-NotContains -Haystack $deployText -Needle '"status": "WIP"' -Message 'Expected commercial deploy template not to tag deployments as WIP after main promotion.'
 Assert-NotContains -Haystack $readmeText -Needle 'img.shields.io/badge/Deploy%20to-Azure%20Gov' -Message 'Expected README not to use the generic shields.io Azure Gov badge.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG to label the button as Deploy to Azure Gov.'
@@ -129,6 +144,11 @@ Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 
 Assert-Contains -Haystack $readmeText -Needle 'Standard `16`, Premium `64`, and Ultra `128` MiB/s per TiB' -Message 'Expected README to document fixed classic service level throughput rates.'
 Assert-Contains -Haystack $readmeText -Needle 'PowerShell 7.2' -Message 'Expected README to document that the deploy template uses the PowerShell 7.2 Azure Automation runtime.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityPoolResourceId` | required |' -Message 'Expected README settings table to document single target capacity pool Resource ID.'
+Assert-Contains -Haystack $readmeText -Needle 'media/automation-variables.png' -Message 'Expected README to include the Azure Automation variables screenshot.'
+Assert-Contains -Haystack $readmeText -Needle '`ANF_TestMode` must be changed to `No` before the runbook applies any changes.' -Message 'Expected README to explicitly call out the live-mode TestMode switch.'
+Assert-Contains -Haystack $readmeText -Needle 'The deployment interface still asks for one capacity pool Resource ID.' -Message 'Expected README to document that multi-pool support is a post-install variable edit.'
+Assert-Contains -Haystack $readmeText -Needle 'separate multiple IDs with new lines, semicolons, or commas' -Message 'Expected README to document supported multi-pool delimiters.'
+Assert-Contains -Haystack $readmeText -Needle 'Each capacity pool is processed independently' -Message 'Expected README to document no cross-pool calculations.'
 Assert-NotContains -Haystack $readmeText -Needle '| `ANF_ResourceGroupName` |' -Message 'Expected README not to ask for target resource group separately.'
 Assert-NotContains -Haystack $readmeText -Needle '| `ANF_AccountName` |' -Message 'Expected README not to ask for target ANF account separately.'
 Assert-NotContains -Haystack $readmeText -Needle '| `ANF_PoolName` |' -Message 'Expected README not to ask for target pool separately.'
