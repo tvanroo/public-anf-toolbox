@@ -1,0 +1,338 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "[concat('ANF-QoS-Volume-Equity-', take(uniqueString(resourceGroup().id, deployment().name), 6))]",
+      "metadata": {
+        "description": "Automation Account name. Change this if the name already exists in the deployment resource group, or clear it to generate a unique name."
+      }
+    },
+    "capacityPoolResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full Resource ID of the initial Azure NetApp Files capacity pool. After deployment, edit the ANF_CapacityPoolResourceId Automation variable to add more pool IDs if needed."
+      }
+    },
+    "testMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = preview only. No = apply live QoS conversion and volume throughput changes."
+      }
+    },
+    "minimumThroughputPerVolume": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minimum throughput floor in MiB/s assigned to every managed volume."
+      }
+    },
+    "convertToManualMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = convert classic Auto QoS pools to Manual QoS before applying explicit volume throughput. In test mode this is only reported."
+      }
+    },
+    "scheduleStartDelayMinutes": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minutes from deployment time until the first scheduled run starts."
+      }
+    },
+    "scheduleBaseTimeUtc": {
+      "type": "string",
+      "defaultValue": "[utcNow('u')]",
+      "metadata": {
+        "description": "Deployment timestamp used to calculate the first scheduled run. Leave the default value."
+      }
+    },
+    "runbookScriptUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-volume-equity-modernization/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1",
+      "metadata": {
+        "description": "Source URL of the runbook script file to import and publish."
+      }
+    }
+  },
+  "variables": {
+    "automationAccountName": "[if(empty(parameters('automationAccountName')), toLower(concat('aa-anf-qos-equity-', take(uniqueString(resourceGroup().id, deployment().name), 8))), parameters('automationAccountName'))]",
+    "capacityPoolResourceIdParts": "[split(parameters('capacityPoolResourceId'), '/')]",
+    "targetAnfSubscriptionId": "[variables('capacityPoolResourceIdParts')[2]]",
+    "targetAnfResourceGroupName": "[variables('capacityPoolResourceIdParts')[4]]",
+    "targetAnfAccountName": "[variables('capacityPoolResourceIdParts')[8]]",
+    "targetAnfAccountResourceId": "[format('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.NetApp/netAppAccounts/{2}', variables('targetAnfSubscriptionId'), variables('targetAnfResourceGroupName'), variables('targetAnfAccountName'))]",
+    "runbookName": "ANF-QoS-Autoscale-VolumeEquity",
+    "scheduleName": "anf-qos-volume-equity-hourly",
+    "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
+    "rbacDeploymentName": "[concat('anf-qos-volume-equity-rbac-', take(uniqueString(variables('targetAnfAccountResourceId'), variables('automationAccountName')), 8))]",
+    "anfAdministratorRoleName": "Azure NetApp Files Administrator",
+    "anfAdministratorRoleDefinitionId": "f5db7409-a2c6-4d0c-8cf4-412ac01a38df",
+    "editableMinimumThroughputVariable": "ANF_MinimumThroughputPerVolume",
+    "editableConvertToManualVariable": "ANF_ConvertToManualMode",
+    "standardTags": {
+      "managed-by": "public-anf-toolbox",
+      "solution": "anf-qos-volume-equity",
+      "repository": "https://github.com/tvanroo/public-anf-toolbox",
+      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Volume%20Equity",
+      "script": "ANF-QoS-Autoscale-VolumeEquity.ps1",
+      "status": "wip"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('automationAccountName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": "[variables('standardTags')]",
+      "properties": {
+        "sku": {
+          "name": "Basic"
+        },
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/modules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/Az.Accounts')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "contentLink": {
+          "uri": "https://www.powershellgallery.com/api/v2/package/Az.Accounts"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "[variables('rbacDeploymentName')]",
+      "subscriptionId": "[variables('targetAnfSubscriptionId')]",
+      "resourceGroup": "[variables('targetAnfResourceGroupName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "targetAnfAccountName": {
+              "type": "string"
+            },
+            "targetAnfAccountResourceId": {
+              "type": "string"
+            },
+            "automationPrincipalId": {
+              "type": "string"
+            },
+            "anfAdministratorRoleDefinitionId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[format('Microsoft.NetApp/netAppAccounts/{0}', parameters('targetAnfAccountName'))]",
+              "name": "[guid(parameters('targetAnfAccountResourceId'), parameters('automationPrincipalId'), parameters('anfAdministratorRoleDefinitionId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('anfAdministratorRoleDefinitionId'))]",
+                "principalId": "[parameters('automationPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "targetAnfAccountName": {
+            "value": "[variables('targetAnfAccountName')]"
+          },
+          "targetAnfAccountResourceId": {
+            "value": "[variables('targetAnfAccountResourceId')]"
+          },
+          "automationPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
+          },
+          "anfAdministratorRoleDefinitionId": {
+            "value": "[variables('anfAdministratorRoleDefinitionId')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TenantId')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Target Azure tenant ID.",
+        "value": "[concat('\"', tenant().tenantId, '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_CapacityPoolResourceId')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "One or more full Resource IDs of target Azure NetApp Files capacity pools. Separate multiple IDs with new lines, semicolons, or commas.",
+        "value": "[concat('\"', parameters('capacityPoolResourceId'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_TestMode')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Runbook mode. Yes=preview only. No=live changes.",
+        "value": "[concat('\"', parameters('testMode'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumThroughputPerVolume')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum throughput floor in MiB/s assigned to every managed volume.",
+        "value": "[string(parameters('minimumThroughputPerVolume'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_ConvertToManualMode')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Yes=convert classic Auto QoS pools to Manual QoS before assigning explicit volume throughput.",
+        "value": "[concat('\"', parameters('convertToManualMode'), '\"')]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('runbookName'))]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/modules', variables('automationAccountName'), 'Az.Accounts')]"
+      ],
+      "tags": "[variables('standardTags')]",
+      "properties": {
+        "description": "ANF QoS Volume Equity runbook for Standard, Premium, Ultra, and Flexible Service Level pools.",
+        "runbookType": "PowerShell72",
+        "logProgress": true,
+        "logVerbose": true,
+        "publishContentLink": {
+          "uri": "[parameters('runbookScriptUri')]",
+          "version": "1.0.0.0"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/schedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('scheduleName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "description": "Hourly schedule for ANF QoS Volume Equity runbook.",
+        "startTime": "[dateTimeAdd(parameters('scheduleBaseTimeUtc'), concat('PT', parameters('scheduleStartDelayMinutes'), 'M'))]",
+        "frequency": "Hour",
+        "interval": 1,
+        "timeZone": "UTC"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/', variables('jobScheduleName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', variables('automationAccountName'), variables('runbookName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/schedules', variables('automationAccountName'), variables('scheduleName'))]"
+      ],
+      "properties": {
+        "schedule": {
+          "name": "[variables('scheduleName')]"
+        },
+        "runbook": {
+          "name": "[variables('runbookName')]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "automationAccountName": {
+      "type": "string",
+      "value": "[variables('automationAccountName')]"
+    },
+    "runbookName": {
+      "type": "string",
+      "value": "[variables('runbookName')]"
+    },
+    "testModeVariable": {
+      "type": "string",
+      "value": "ANF_TestMode"
+    },
+    "capacityPoolResourceIdVariable": {
+      "type": "string",
+      "value": "ANF_CapacityPoolResourceId"
+    },
+    "minimumThroughputVariable": {
+      "type": "string",
+      "value": "[variables('editableMinimumThroughputVariable')]"
+    },
+    "convertToManualVariable": {
+      "type": "string",
+      "value": "[variables('editableConvertToManualVariable')]"
+    },
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
+    },
+    "rbac": {
+      "type": "string",
+      "value": "[concat('Assigned ', variables('anfAdministratorRoleName'), ' at the target ANF account scope: ', variables('targetAnfAccountResourceId'))]"
+    }
+  }
+}

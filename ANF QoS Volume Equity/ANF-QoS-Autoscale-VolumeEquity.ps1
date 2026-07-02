@@ -1,183 +1,744 @@
+#!/usr/bin/env pwsh
 <# *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 This repository is published publicly as a resource for other Azure NetApp Files (ANF) and Azure specialists. However, please be aware of the following:
 
-1. **Unofficial Content:** Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
-2. **No Endorsement:** While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
-3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
+1. Unofficial Content: Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
+2. No Endorsement: While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
+3. Use at Your Own Risk: Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
-Last Edit Date: 10/24/2024
+
+Last Edit Date: 07/02/2026
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-This script automates the allocation of Throughput MiBs/Sec to Azure NetApp Files volumes equally for all volumes.
+Allocate Azure NetApp Files Manual QoS volume throughput equally across all volumes in a capacity pool.
+This script is designed for Azure Automation and can also be run manually from Cloud Shell or a local PowerShell session.
 
-Azure Automation Account Requirements:
-To run via an Azure Automation Script, the script must be modified to authenticate to Azure using a Service Principal. 
-Use "Connect-AzAccount -Identity" instead of "Connect-AzAccount".
+Important behavior:
+- Supports Standard, Premium, Ultra, and Flexible Service Level capacity pools.
+- Auto QoS pools are converted to Manual QoS when ANF_ConvertToManualMode is Yes. In test mode, this conversion is only reported.
+- Classic service level throughput per TiB is hard-coded: Standard=16, Premium=64, Ultra=128 MiB/s.
+- FSL uses the current manual pool throughput as the volume-equity budget. The script does not purchase, increase, or decrease FSL pool throughput.
+- Every managed volume receives an equal share of the pool throughput budget.
+- Every configured capacity pool is processed independently; no capacity, throughput, or service-level math crosses pool boundaries.
 
+Azure Automation Account Setup Requirements:
+1. REQUIRED MODULES:
+   - Az.Accounts
+
+2. REQUIRED RBAC PERMISSIONS for Managed Identity:
+   - Azure NetApp Files Administrator on the target ANF account scope.
+
+3. SETTINGS:
+   Settings can be supplied as Azure Automation variables or as process environment variables with the same names.
+   Azure Automation variables are used first when running in an Automation Account; otherwise environment variables are used before defaults.
+
+   Required target settings:
+   - ANF_TenantId: Azure Tenant ID (string)
+   - ANF_CapacityPoolResourceId: One or more capacity pool Resource IDs separated by new lines, semicolons, or commas (string)
+
+   QoS settings:
+   - ANF_TestMode: "Yes" for preview, "No" for live changes (string, default: "Yes")
+   - ANF_ConvertToManualMode: "Yes" to convert classic Auto QoS pools to Manual QoS before assigning volume throughput (string, default: "Yes")
+   - ANF_MinimumThroughputPerVolume: Per-volume throughput floor in MiB/s (int, default: 1)
 #>
 
-# Install az modules and az.netappfiles module
-# Install-Module -Name Az -Force -AllowClobber
-# Install-Module -Name Az.NetAppFiles -Force -AllowClobber
-
-
-# User Editable Variables:
-    $tenantId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"      # Tenant ID for the Azure subscription
-    $resourceGroupName = "example-rg"                       # Resource group name where the Azure NetApp Files resources are located
-    $anfAccountName = "example-anf-acct"                    # Azure NetApp Files account name
-    $anfPoolName = "example-anf-pool"                       # Azure NetApp Files capacity pool name
-    $testMode = "Yes"                                       # Test Mode Selector: "Yes", "No"  Yes displays report, No makes changes and displays report
-    $ConvertToManualMode = "Yes"                            # Convert to manual mode: "Yes", "No" Yes converts to manual QoS, No does not convert to manual QoS and exist script if QoS is not manual
-    $throughputLookBackHours = 168                          # Look-back period in hours for throughput metrics
-
-
-# Connect to Azure
-if (-not (Get-AzContext)) {
-    Connect-AzAccount -TenantId $tenantId
-    Get-AzContext
+$runningInAutomation = $false
+if ($env:AUTOMATION_ASSET_ACCOUNTID) {
+    $runningInAutomation = $true
+    Write-Output "Running in Azure Automation Account: $env:AUTOMATION_ASSET_ACCOUNTID"
 }
 
-if ($testMode -eq "Yes") {
-    Write-Host "Script is running in test mode.  Changes will not be made to the volumes." -ForegroundColor Green
-} elseif ($testMode -eq "No") {
-    Write-Host "Script is running in ***live*** mode.  Changes ***will*** be made to the volumes." -ForegroundColor Yellow
-} else { 
-    Write-Host "Test Mode is not set to Yes or No. Exiting Script." -ForegroundColor Red
-    exit
+Write-Output "Loading required Azure PowerShell modules..."
+$requiredModules = @('Az.Accounts')
+
+foreach ($module in $requiredModules) {
+    try {
+        Import-Module $module -Force -ErrorAction Stop
+        $moduleInfo = Get-Module $module
+        Write-Output "Successfully imported module: $module (Version: $($moduleInfo.Version))"
+    } catch {
+        Write-Error "Failed to import module $module. Please ensure it is installed."
+        throw "Required module $module is not available"
+    }
+}
+
+function Get-AnfSetting {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter()][object]$Default = $null
+    )
+
+    $value = $null
+    if ($runningInAutomation -and (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue)) {
+        try {
+            $value = Get-AutomationVariable -Name $Name -ErrorAction SilentlyContinue
+        } catch {
+            $value = $null
+        }
     }
 
-# Get the Azure NetApp Files account details
-$anfAccount = Get-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName
-# Get the Azure NetApp Files capacity pool details
-$anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-# Get Capacity Pool QoS Type
-$cap_pool_qos_type = $anfPool.QosType
-# Get the maximum provisioned throughput of the capacity pool in MiB/s
-$cap_pool_max_throughput = $anfPool.TotalThroughputMibps
-#if QoS type is manual, continue script, if not prompt user to convert to manual or exit with numbered list
-if ($cap_pool_qos_type -eq "Manual" -or $ConvertToManualMode -eq "Yes" -or $testMode -eq "Yes") {
-    #continue script 
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        $value = [Environment]::GetEnvironmentVariable($Name)
+    }
+
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        return $Default
+    }
+
+    return $value
+}
+
+function Convert-AnfSettingToInt {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][object]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+
+    try {
+        $converted = [int]$Value
+    } catch {
+        throw "$Name must be an integer. Current value: '$Value'"
+    }
+
+    if ($converted -lt $Minimum) {
+        throw "$Name must be greater than or equal to $Minimum. Current value: '$Value'"
+    }
+
+    return $converted
+}
+
+function Test-AnfYes {
+    param([object]$Value)
+    return "$Value".Trim().Equals("Yes", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-AnfCapacityPoolResourceId {
+    param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceId)
+
+    $normalizedResourceId = "$CapacityPoolResourceId".Trim().TrimEnd("/")
+    $pattern = '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.NetApp/netAppAccounts/([^/]+)/capacityPools/([^/]+)$'
+    if ($normalizedResourceId -notmatch $pattern) {
+        throw "ANF_CapacityPoolResourceId must be a capacity pool Resource ID in this format: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
+    }
+
+    return [PSCustomObject]@{
+        CapacityPoolResourceId = $normalizedResourceId
+        SubscriptionId = $Matches[1]
+        ResourceGroupName = $Matches[2]
+        AccountName = $Matches[3]
+        PoolName = $Matches[4]
+    }
+}
+
+function Resolve-AnfCapacityPoolResourceIds {
+    param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceIds)
+
+    $tokens = @("$CapacityPoolResourceIds" -split '[\r\n;,]+' | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if ($tokens.Count -eq 0) {
+        throw "ANF_CapacityPoolResourceId must contain at least one capacity pool Resource ID."
+    }
+
+    $targets = @()
+    $seenResourceIds = @{}
+    foreach ($token in $tokens) {
+        $target = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $token
+        $dedupeKey = $target.CapacityPoolResourceId.ToLowerInvariant()
+        if ($seenResourceIds.ContainsKey($dedupeKey)) {
+            Write-Warning "Duplicate capacity pool Resource ID ignored: $($target.CapacityPoolResourceId)"
+            continue
+        }
+
+        $seenResourceIds[$dedupeKey] = $true
+        $targets += $target
+    }
+
+    return @($targets)
+}
+
+function Get-AnfObjectProperty {
+    param(
+        [Parameter(Mandatory=$true)][object]$InputObject,
+        [Parameter(Mandatory=$true)][string[]]$PropertyNames
+    )
+
+    foreach ($propertyName in $PropertyNames) {
+        if ($InputObject -is [System.Collections.IDictionary] -and $InputObject.Contains($propertyName)) {
+            return $InputObject[$propertyName]
+        }
+
+        $property = $InputObject.PSObject.Properties | Where-Object { $_.Name -eq $propertyName } | Select-Object -First 1
+        if ($property) {
+            return $property.Value
+        }
+    }
+
+    return $null
+}
+
+function Resolve-AnfThroughputMibpsFromProperties {
+    param([object]$Properties)
+
+    if ($null -eq $Properties) {
+        return $null
+    }
+
+    $throughputCandidates = @(
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('totalThroughputMibps', 'TotalThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('throughputMibps', 'ThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('provisionedThroughputMibps', 'ProvisionedThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('actualThroughputMibps', 'ActualThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('customThroughputMibps', 'CustomThroughputMibps'))
+    )
+
+    foreach ($candidate in $throughputCandidates) {
+        if ($null -ne $candidate -and "$candidate" -ne "") {
+            try {
+                return [double]$candidate
+            } catch {}
+        }
+    }
+
+    return $null
+}
+
+function Convert-ToWholeThroughputMibps {
+    param(
+        [Parameter(Mandatory=$true)][double]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+
+    $rounded = [int][math]::Round($Value, 0, [System.MidpointRounding]::AwayFromZero)
+    if ($rounded -lt $Minimum) {
+        return $Minimum
+    }
+
+    return $rounded
+}
+
+function Test-AnfFlexibleServiceLevel {
+    param([object]$ServiceLevel)
+
+    if ($null -eq $ServiceLevel) {
+        return $false
+    }
+
+    return "$ServiceLevel".Trim().ToLowerInvariant() -eq "flexible"
+}
+
+function Get-AnfClassicManualThroughputPerTiB {
+    param([Parameter(Mandatory=$true)][object]$ServiceLevel)
+
+    switch ("$ServiceLevel".Trim()) {
+        "Standard" { return 16 }
+        "Premium" { return 64 }
+        "Ultra" { return 128 }
+        default {
+            throw "Unsupported service level '$ServiceLevel'. Expected Standard, Premium, Ultra, or Flexible."
+        }
+    }
+}
+
+$tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+$capacityPoolResourceIdSetting = Get-AnfSetting -Name "ANF_CapacityPoolResourceId"
+$anfTargets = @()
+if ($capacityPoolResourceIdSetting) {
+    $anfTargets = @(Resolve-AnfCapacityPoolResourceIds -CapacityPoolResourceIds $capacityPoolResourceIdSetting)
+}
+
+if ($anfTargets.Count -eq 0) {
+    Write-Error "ANF_CapacityPoolResourceId must be set before running this script"
+    throw "Missing required variable: ANF_CapacityPoolResourceId"
+}
+
+$testMode = "$((Get-AnfSetting -Name "ANF_TestMode" -Default "Yes"))"
+$convertToManualMode = "$((Get-AnfSetting -Name "ANF_ConvertToManualMode" -Default "Yes"))"
+$minimumThroughputPerVolume = Convert-AnfSettingToInt -Name "ANF_MinimumThroughputPerVolume" -Value (Get-AnfSetting -Name "ANF_MinimumThroughputPerVolume" -Default 1) -Minimum 1
+
+if (-not (Test-AnfYes -Value $testMode) -and -not "$testMode".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error "Test Mode is not set to Yes or No. Exiting Script."
+    throw "Invalid test mode configuration"
+}
+if (-not (Test-AnfYes -Value $convertToManualMode) -and -not "$convertToManualMode".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
+    Write-Error "Convert to Manual Mode is not set to Yes or No. Exiting Script."
+    throw "Invalid conversion mode configuration"
+}
+
+Write-Output "=== ANF QoS Volume Equity Configuration ==="
+Write-Output "Execution Mode: $(if ($runningInAutomation) { 'Azure Automation Account' } else { 'Local/Manual Execution' })"
+Write-Output "Tenant ID: $tenantId"
+Write-Output "Capacity Pool Targets: $($anfTargets.Count)"
+foreach ($anfTarget in $anfTargets) {
+    Write-Output "  - $($anfTarget.CapacityPoolResourceId)"
+}
+Write-Output "Minimum Throughput Per Volume: $minimumThroughputPerVolume MiB/s"
+Write-Output "Convert Auto QoS to Manual: $convertToManualMode"
+
+if (Test-AnfYes -Value $testMode) {
+    Write-Output "Running in TEST MODE - no changes will be made"
 } else {
-    Write-Host "Exiting Script - Manual QoS is required" -ForegroundColor Red
-    Write-Host "Capacity Pool QoS is currently set to '$cap_pool_qos_type'" -ForegroundColor Red
-    Write-Host "Script is set to run with 'Convert to Manual' set to '$ConvertToManualMode'" -ForegroundColor Red
-    Write-Host "Script is set to run with 'Test Mode' set to '$testMode'" -ForegroundColor Red
-    exit
-    } 
+    Write-Output "Running in LIVE MODE - changes will be applied"
+}
 
-# If QoS is Auto and ConvertToManualMode is set to "Yes", convert the Capacity Pool to Manual
-if ($cap_pool_qos_type -eq "Auto" -and $ConvertToManualMode -eq "Yes") {
-    if ($testMode -eq "Yes") {
-        Write-Host "TEST MODE: Capacity Pool QoS would be converted to Manual" -ForegroundColor Yellow
-    } else {
-        Write-Host "Converting Capacity Pool QoS to Manual" -ForegroundColor Yellow
-        $anfPool | Update-AzNetAppFilesPool -QosType Manual  > $null
-        $anfPool = Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-        $cap_pool_qos_type = $anfPool.QosType
-        $cap_pool_max_throughput = $anfPool.TotalThroughputMibps
-        Write-Host "Capacity Pool QoS converted to Manual" -ForegroundColor Green
+$anfApiVersion = "2026-04-01"
+$bytesPerGiB = [math]::Pow(1024, 3)
+$bytesPerTiB = [math]::Pow(1024, 4)
+
+function Invoke-AnfArmJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$QueryString = "",
+        [Parameter()][string]$BodyJson
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceManagerUrl = $context.Environment.ResourceManagerUrl.TrimEnd('/')
+    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate(
+        $context.Account,
+        $context.Environment,
+        $context.Tenant.Id,
+        $null,
+        "Never",
+        $null,
+        "$resourceManagerUrl/"
+    ).AccessToken
+
+    $normalizedQueryString = ""
+    if ($QueryString) {
+        $normalizedQueryString = "$QueryString"
+        if ($normalizedQueryString.StartsWith("?")) {
+            $normalizedQueryString = "&$($normalizedQueryString.Substring(1))"
+        } elseif (-not $normalizedQueryString.StartsWith("&")) {
+            $normalizedQueryString = "&$normalizedQueryString"
+        }
     }
-}   
 
-
-# Get list of Volumes within Capacity Pool
-$anfVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
-
-# Collect Info for Each Volume and calculate values
-    # If there are no volumes, write host message and exit
-    if (-not $anfVolumes) {
-        Write-Host "No volumes found in Azure NetApp Files Capacity Pool `"$anfPoolName`". Exiting script." -ForegroundColor Red
-        exit
+    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion$normalizedQueryString"
+    $headers = @{
+        'Authorization' = "Bearer $token"
+        'Content-Type' = 'application/json'
     }
-    # Collect data for each volume
-    $volumeData = foreach ($anfVolume in $anfVolumes) {
+
+    if ($BodyJson) {
+        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $BodyJson -ErrorAction Stop
+    }
+
+    return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+}
+
+function New-AnfResourceId {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter()][string]$PoolName,
+        [Parameter()][string]$VolumeName
+    )
+
+    $resourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.NetApp/netAppAccounts/$AccountName"
+    if ($PoolName) {
+        $resourceId = "$resourceId/capacityPools/$PoolName"
+    }
+    if ($VolumeName) {
+        $resourceId = "$resourceId/volumes/$VolumeName"
+    }
+
+    return $resourceId
+}
+
+function Get-AnfVolumeShortName {
+    param([Parameter(Mandatory=$true)][object]$VolumeObject)
+
+    $name = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('ShortName', 'Name', 'name')
+    if ($name -and "$name".Contains('/')) {
+        return ("$name".Split('/')[-1])
+    }
+
+    if ($name) {
+        return "$name"
+    }
+
+    $id = Get-AnfObjectProperty -InputObject $VolumeObject -PropertyNames @('Id', 'id')
+    if ($id -and "$id" -match "/volumes/([^/]+)$") {
+        return $Matches[1]
+    }
+
+    throw "Unable to resolve volume short name from volume object."
+}
+
+function Convert-AnfRestPool {
+    param([Parameter(Mandatory=$true)][object]$Pool)
+
+    $poolProperties = $Pool.properties
+    $resolvedSize = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('size', 'Size')
+    $resolvedServiceLevel = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('serviceLevel', 'ServiceLevel')
+    $resolvedQosType = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('qosType', 'QosType')
+    $resolvedThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $poolProperties
+    if ($null -eq $resolvedThroughputMibps) {
+        $resolvedThroughputMibps = 0
+    }
+
+    return [PSCustomObject]@{
+        Id = $Pool.id
+        Name = $Pool.name
+        Size = [double]$resolvedSize
+        ServiceLevel = $resolvedServiceLevel
+        QosType = $resolvedQosType
+        TotalThroughputMibps = [double]$resolvedThroughputMibps
+        Raw = $Pool
+    }
+}
+
+function Convert-AnfRestVolume {
+    param([Parameter(Mandatory=$true)][object]$Volume)
+
+    $volumeProperties = $Volume.properties
+    $usageThreshold = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('usageThreshold', 'UsageThreshold')
+    $throughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $volumeProperties
+    if ($null -eq $throughputMibps) {
+        $throughputMibps = 0
+    }
+
+    return [PSCustomObject]@{
+        Id = $Volume.id
+        Name = Get-AnfVolumeShortName -VolumeObject $Volume
+        UsageThreshold = [double]$usageThreshold
+        ThroughputMibps = [double]$throughputMibps
+        Raw = $Volume
+    }
+}
+
+function Get-AnfAccount {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName
+    )
+
+    $resourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName
+    $account = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($account -and $account.error) {
+        throw "ANF account REST API returned error for $ResourceGroupName/$AccountName. code='$($account.error.code)' message='$($account.error.message)'"
+    }
+
+    if (-not $account -or -not $account.id) {
+        throw "Unable to parse ANF account REST response for $ResourceGroupName/$AccountName."
+    }
+
+    return $account
+}
+
+function Get-AnfPool {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    $resourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName
+    $poolCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($poolCandidate -and $poolCandidate.error) {
+        throw "Capacity pool REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($poolCandidate.error.code)' message='$($poolCandidate.error.message)'"
+    }
+
+    if (-not $poolCandidate -or -not $poolCandidate.properties) {
+        throw "Unable to parse capacity pool REST response for $ResourceGroupName/$AccountName/$PoolName."
+    }
+
+    return Convert-AnfRestPool -Pool $poolCandidate
+}
+
+function Get-AnfVolumes {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    $resourceId = "$(New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName)/volumes"
+    $volumesCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
+    if ($volumesCandidate -and $volumesCandidate.error) {
+        throw "Volume list REST API returned error for $ResourceGroupName/$AccountName/$PoolName. code='$($volumesCandidate.error.code)' message='$($volumesCandidate.error.message)'"
+    }
+
+    $volumes = @()
+    if ($volumesCandidate -and $volumesCandidate.value) {
+        $volumes = @($volumesCandidate.value)
+    } elseif ($volumesCandidate -and $volumesCandidate.id) {
+        $volumes = @($volumesCandidate)
+    }
+
+    return @($volumes | ForEach-Object { Convert-AnfRestVolume -Volume $_ })
+}
+
+function Update-AnfPoolQosTypeManual {
+    param([Parameter(Mandatory=$true)][string]$PoolResourceId)
+
+    $body = @{
+        properties = @{
+            qosType = "Manual"
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
+function Update-AnfVolumeThroughput {
+    param(
+        [Parameter(Mandatory=$true)][string]$VolumeResourceId,
+        [Parameter(Mandatory=$true)][int]$TargetThroughputMibps
+    )
+
+    $body = @{
+        properties = @{
+            throughputMibps = $TargetThroughputMibps
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $VolumeResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
+function Get-AnfPoolThroughputBudgetMibps {
+    param([Parameter(Mandatory=$true)][object]$Pool)
+
+    if (Test-AnfFlexibleServiceLevel -ServiceLevel $Pool.ServiceLevel) {
+        if ($Pool.QosType -ne "Manual") {
+            throw "Flexible Service Level pools require Manual QoS. Pool '$($Pool.Name)' has QoS type '$($Pool.QosType)'."
+        }
+
+        if ($Pool.TotalThroughputMibps -le 0) {
+            throw "Unable to determine current FSL pool throughput for '$($Pool.Name)'."
+        }
+
+        return (Convert-ToWholeThroughputMibps -Value $Pool.TotalThroughputMibps -Minimum 1)
+    }
+
+    $throughputPerTiB = Get-AnfClassicManualThroughputPerTiB -ServiceLevel $Pool.ServiceLevel
+    $poolTiB = [double]$Pool.Size / $bytesPerTiB
+    return (Convert-ToWholeThroughputMibps -Value ($poolTiB * $throughputPerTiB) -Minimum 1)
+}
+
+function Get-AnfVolumeEquityPlan {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Volumes,
+        [Parameter(Mandatory=$true)][int]$PoolThroughputBudgetMibps,
+        [Parameter(Mandatory=$true)][int]$MinimumThroughputPerVolume
+    )
+
+    if ($Volumes.Count -eq 0) {
+        return @()
+    }
+
+    $minimumTotal = $Volumes.Count * $MinimumThroughputPerVolume
+    if ($minimumTotal -gt $PoolThroughputBudgetMibps) {
+        throw "Minimum throughput requirement exceeds available pool throughput. Volumes=$($Volumes.Count), MinimumPerVolume=$MinimumThroughputPerVolume MiB/s, Required=$minimumTotal MiB/s, Available=$PoolThroughputBudgetMibps MiB/s."
+    }
+
+    $baseTarget = [int][math]::Floor($PoolThroughputBudgetMibps / $Volumes.Count)
+    if ($baseTarget -lt $MinimumThroughputPerVolume) {
+        throw "Equal-share target is below the configured minimum throughput. Volumes=$($Volumes.Count), Target=$baseTarget MiB/s, MinimumPerVolume=$MinimumThroughputPerVolume MiB/s."
+    }
+
+    $remainderThroughput = [int]($PoolThroughputBudgetMibps - ($baseTarget * $Volumes.Count))
+    $volumeIndex = 0
+    $orderedVolumes = @($Volumes | Sort-Object -Property ShortName)
+    $planRows = foreach ($volume in $orderedVolumes) {
+        $extraThroughput = if ($volumeIndex -lt $remainderThroughput) { 1 } else { 0 }
+        $targetThroughput = $baseTarget + $extraThroughput
+        $volumeIndex += 1
+
         [PSCustomObject]@{
-            ShortName = $anfVolume.Name.split('/')[2]
-            SizeGiB = $anfVolume.UsageThreshold / 1024 / 1024 / 1024
-            ThroughputMetric = [math]::Round($((Get-AzMetric -ResourceId $anfVolume.Id -MetricName 'TotalThroughput' -StartTime $(get-date).AddHours(-$throughputLookBackHours) -EndTime $(get-date) -TimeGrain 00:5:00 -WarningAction SilentlyContinue | Select-Object -ExpandProperty data | Select-Object -ExpandProperty Average) | Measure-Object -average).average, 3)
-            CurrentThroughputMibps = $anfVolume.ActualThroughputMibps
+            ShortName = $volume.ShortName
+            VolumeId = $volume.VolumeId
+            SizeGiB = $volume.SizeGiB
+            ThroughputSharePercentage = [math]::Round(($targetThroughput / $PoolThroughputBudgetMibps) * 100, 3)
+            CurrentThroughputMibps = [int][math]::Round([double]$volume.CurrentThroughputMibps, 0, [System.MidpointRounding]::AwayFromZero)
+            NewThroughputMibps = [int]$targetThroughput
+            NetChangeInThroughputMibps = 0
         }
     }
 
-    # Ensure the total number of volumes is less than the whole number of MiB/s in the pool, write host for both possible outcomes
-    if ($anfVolumes.Count -gt $cap_pool_max_throughput) {
-        Write-Host "The total number of volumes in the pool exceeds the total throughput of the pool. Exiting script." -ForegroundColor Red
-        exit
-    } else {
+    foreach ($row in $planRows) {
+        $row.NetChangeInThroughputMibps = $row.NewThroughputMibps - $row.CurrentThroughputMibps
     }
 
-# Calculate unallocated size and throughput
-$totalSizeGiB = ($volumeData | Measure-Object -Property SizeGiB -Sum).Sum
-$unallocatedSizeGiB = $anfPool.Size / 1024 / 1024 / 1024 - $totalSizeGiB
-$totalCurrentThroughputMibps = ($volumeData | Measure-Object -Property CurrentThroughputMibps -Sum).Sum
-$unallocatedThroughputMibps = $cap_pool_max_throughput - $totalCurrentThroughputMibps
-
-# Add the "unallocated" row
-$unallocatedRow = [PSCustomObject]@{
-    ShortName = "unallocated"
-    CurrentThroughputMibps = $unallocatedThroughputMibps
-    SizeGiB = $unallocatedSizeGiB
-    ThroughputMetric = 0
+    return @($planRows | Sort-Object -Property NetChangeInThroughputMibps, ShortName)
 }
 
-# Combine volume data with the unallocated row
-$finalData = $volumeData + $unallocatedRow
-
-        # Add the property NewThroughputValue to each object
-$finalData = $finalData | ForEach-Object {
-    $_ | Add-Member -MemberType NoteProperty -Name NewThroughputValue -Value 0 -Force
-    $_
-}
-        
-# Calculate the NewThroughputValue for each volume
-$finalData | ForEach-Object {
-    if ($_.ShortName -ne "unallocated") {
-        $_.NewThroughputValue = $cap_pool_max_throughput / $anfVolumes.Count
-    } else {
-        $_.NewThroughputValue = 0
+Write-Output "Authenticating to Azure..."
+try {
+    try {
+        $null = Disable-AzContextAutosave -Scope Process -ErrorAction Stop
+        Write-Output "Disabled Az context autosave for this run"
+    } catch {
+        Write-Warning "Unable to disable Az context autosave: $($_.Exception.Message)"
     }
-}        
-        
-        # Add NetChangeInThroughputMibs to each object
-        $finalData = $finalData | ForEach-Object {
-            $_ | Add-Member -MemberType NoteProperty -Name NetChangeInThroughputMibs -Value 0 -Force
-            $_
-        }
-        
-        # Calculate NetChangeInThroughputMibs for each object as the net change from the current throughput
-        $finalData | ForEach-Object {
-            if ($_.ShortName -ne "unallocated") {
-                $_.NetChangeInThroughputMibs = $_.NewThroughputValue - $_.CurrentThroughputMibps
+
+    if ($runningInAutomation) {
+        Write-Output "Connecting using Managed Identity..."
+        $null = Connect-AzAccount -Identity -ErrorAction Stop
+        Write-Output "Successfully authenticated using Managed Identity"
+    } else {
+        try {
+            $currentContext = Get-AzContext -ErrorAction Stop
+            if ($currentContext -and $currentContext.Account -and $currentContext.Account.Id) {
+                Write-Output "Already authenticated to Azure as: $($currentContext.Account.Id)"
+                if ($tenantId -and $tenantId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -and $currentContext.Tenant.Id -ne $tenantId) {
+                    Write-Output "Switching to specified tenant: $tenantId"
+                    $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+                }
             } else {
-                $_.NetChangeInThroughputMibs = 0
+                if ($tenantId -and $tenantId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+                    $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+                } else {
+                    $null = Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop
+                }
+            }
+        } catch {
+            Write-Output "No valid existing Azure context found; starting device authentication."
+            if ($tenantId -and $tenantId -ne "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") {
+                $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+            } else {
+                $null = Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop
             }
         }
-        
-        # Sort the data to ensure decreases happen first
-        $finalData = $finalData | Sort-Object -Property NetChangeInThroughputMibs
-        
-# If the NetChangeInThroughputMibs property is equal to 0 for every volume object, write a host message and exit. Otherwise, run the rest of the code below.
-if (($finalData | Where-Object { $_.NetChangeInThroughputMibs -ne 0 } | Measure-Object).Count -eq 0) {
-    Write-Host "All volumes are already at the correct throughput value. Exiting script." -ForegroundColor Green
-    $finalData | Format-Table -AutoSize
-    exit
-} else {
-    # If $testMode is "No", update the volume settings in Azure with the new throughput values. Otherwise, display the table.
-    if ($testMode -eq "No") {
-        # Update the volumes with the new throughput values
-        $finalData | Format-Table -AutoSize
-        $finalData | ForEach-Object {
-            if ($_.ShortName -ne "unallocated") {
-                Write-Host "Updating volume `"$($_.ShortName)`" with new throughput value of `"$($_.NewThroughputValue)`" MiB/s" -ForegroundColor Yellow
-                $anfVolume = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $_.ShortName
-                $anfVolume | Update-AzNetAppFilesVolume -ThroughputMibps $_.NewThroughputValue > $null
-            }
+    }
+
+    $context = Get-AzContext
+    Write-Output "Azure Context: $($context.Account.Id) in subscription $($context.Subscription.Name)"
+} catch {
+    Write-Error "Failed to authenticate to Azure: $_"
+    throw "Authentication failed"
+}
+
+$failedCapacityPools = @()
+foreach ($anfTarget in $anfTargets) {
+try {
+    $capacityPoolResourceId = $anfTarget.CapacityPoolResourceId
+    $subscriptionId = $anfTarget.SubscriptionId
+    $resourceGroupName = $anfTarget.ResourceGroupName
+    $anfAccountName = $anfTarget.AccountName
+    $anfPoolName = $anfTarget.PoolName
+
+    Write-Output ""
+    Write-Output ("=" * 100)
+    Write-Output "Processing capacity pool: $capacityPoolResourceId"
+    Write-Output "Target subscription: $subscriptionId"
+
+    try {
+        $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+    } catch {
+        throw "Failed to set Azure context to target subscription '$subscriptionId': $($_.Exception.Message)"
+    }
+
+    $null = Get-AnfAccount -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName
+    $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+    $isFlexibleServiceLevel = Test-AnfFlexibleServiceLevel -ServiceLevel $anfPool.ServiceLevel
+
+    Write-Output "Pool details: ServiceLevel=$($anfPool.ServiceLevel); QoS=$($anfPool.QosType); SizeGiB=$([math]::Round($anfPool.Size / $bytesPerGiB, 0)); TotalThroughputMibps=$($anfPool.TotalThroughputMibps)"
+
+    if ($anfPool.QosType -ne "Manual") {
+        if ($isFlexibleServiceLevel) {
+            throw "Flexible Service Level pools require Manual QoS. Pool '$anfPoolName' has QoS type '$($anfPool.QosType)'."
         }
+
+        if (-not (Test-AnfYes -Value $convertToManualMode)) {
+            throw "Manual QoS is required. Pool '$anfPoolName' is '$($anfPool.QosType)' and ANF_ConvertToManualMode is '$convertToManualMode'."
+        }
+
+        if (Test-AnfYes -Value $testMode) {
+            Write-Output "TEST MODE: Capacity pool QoS would be converted from '$($anfPool.QosType)' to Manual before volume throughput updates."
+        } else {
+            Write-Output "Converting capacity pool QoS from '$($anfPool.QosType)' to Manual..."
+            Update-AnfPoolQosTypeManual -PoolResourceId $anfPool.Id
+            $anfPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+            Write-Output "Capacity pool QoS after conversion: $($anfPool.QosType)"
+        }
+    }
+
+    $poolThroughputBudgetMibps = Get-AnfPoolThroughputBudgetMibps -Pool $anfPool
+    if ($isFlexibleServiceLevel) {
+        Write-Output "FSL uses the current manual pool throughput as the volume-equity budget: $poolThroughputBudgetMibps MiB/s"
     } else {
-        $finalData | Format-Table -AutoSize
+        $classicRate = Get-AnfClassicManualThroughputPerTiB -ServiceLevel $anfPool.ServiceLevel
+        Write-Output "Classic service level throughput budget: $classicRate MiB/s per TiB x $([math]::Round($anfPool.Size / $bytesPerTiB, 3)) TiB = $poolThroughputBudgetMibps MiB/s"
+    }
+
+    $anfVolumes = @(Get-AnfVolumes -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName)
+    if ($anfVolumes.Count -eq 0) {
+        Write-Output "No volumes found in Azure NetApp Files capacity pool '$anfPoolName'. Skipping pool."
+        continue
+    }
+
+    $volumeInputs = foreach ($anfVolume in $anfVolumes) {
+        [PSCustomObject]@{
+            ShortName = $anfVolume.Name
+            VolumeId = $anfVolume.Id
+            SizeGiB = [math]::Round($anfVolume.UsageThreshold / $bytesPerGiB, 3)
+            CurrentThroughputMibps = $anfVolume.ThroughputMibps
+        }
+    }
+
+    $finalData = @(Get-AnfVolumeEquityPlan -Volumes $volumeInputs -PoolThroughputBudgetMibps $poolThroughputBudgetMibps -MinimumThroughputPerVolume $minimumThroughputPerVolume)
+    $totalCurrentThroughputMibps = [int](($finalData | Measure-Object -Property CurrentThroughputMibps -Sum).Sum)
+    $unallocatedThroughputMibps = $poolThroughputBudgetMibps - $totalCurrentThroughputMibps
+    $unallocatedSizeGiB = [math]::Round(($anfPool.Size / $bytesPerGiB) - (($volumeInputs | Measure-Object -Property SizeGiB -Sum).Sum), 3)
+    $unallocatedRow = [PSCustomObject]@{
+        ShortName = "unallocated"
+        VolumeId = ""
+        SizeGiB = $unallocatedSizeGiB
+        ThroughputSharePercentage = 0
+        CurrentThroughputMibps = $unallocatedThroughputMibps
+        NewThroughputMibps = 0
+        NetChangeInThroughputMibps = 0
+    }
+
+    $displayData = @($finalData + $unallocatedRow)
+    $displayData | Select-Object ShortName, SizeGiB, ThroughputSharePercentage, CurrentThroughputMibps, NewThroughputMibps, NetChangeInThroughputMibps | Format-Table -AutoSize
+
+    $targetThroughputTotal = [int](($finalData | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+    Write-Output "Planned managed volume throughput total: $targetThroughputTotal MiB/s of $poolThroughputBudgetMibps MiB/s"
+
+    $updates = @($finalData | Where-Object { $_.NetChangeInThroughputMibps -ne 0 })
+    if ($updates.Count -eq 0) {
+        Write-Output "All volumes in pool '$anfPoolName' are already at the volume-equity throughput values."
+        continue
+    }
+
+    if (Test-AnfYes -Value $testMode) {
+        foreach ($row in $updates) {
+            Write-Output "TEST MODE: Volume '$($row.ShortName)' throughput would change from $($row.CurrentThroughputMibps) to $($row.NewThroughputMibps) MiB/s"
+        }
+        continue
+    }
+
+    foreach ($row in @($updates | Sort-Object -Property NetChangeInThroughputMibps, ShortName)) {
+        Write-Output "Updating volume '$($row.ShortName)' throughput from $($row.CurrentThroughputMibps) to $($row.NewThroughputMibps) MiB/s..."
+        Update-AnfVolumeThroughput -VolumeResourceId $row.VolumeId -TargetThroughputMibps $row.NewThroughputMibps
+    }
+
+    Write-Output "Completed throughput updates for pool '$anfPoolName'."
+}
+catch {
+    Write-Error "Failed processing capacity pool '$($anfTarget.CapacityPoolResourceId)': $($_.Exception.Message)"
+    $failedCapacityPools += [PSCustomObject]@{
+        CapacityPoolResourceId = $anfTarget.CapacityPoolResourceId
+        Error = $_.Exception.Message
     }
 }
+}
+
+if ($failedCapacityPools.Count -gt 0) {
+    Write-Error "One or more capacity pools failed: $($failedCapacityPools.CapacityPoolResourceId -join ', ')"
+    throw "ANF QoS Volume Equity failed for $($failedCapacityPools.Count) pool(s)."
+}
+
+Write-Output "ANF QoS Volume Equity completed."
