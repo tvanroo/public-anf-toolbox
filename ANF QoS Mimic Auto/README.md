@@ -12,8 +12,8 @@ By using any content from this repository, you acknowledge that you do so at you
 
 ## Download Script
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-mimic-auto-modernization%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy.json)
-[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-mimic-auto-modernization%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy-gov.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy-gov.json)
 
 [ANF QoS Mimic Auto](./ANF-QoS-Autoscale-MimicAuto.ps1)
     - Assigns Manual QoS volume throughput in proportion to provisioned volume size so Manual QoS behaves similarly to Auto QoS allocation.
@@ -23,6 +23,8 @@ The deployment buttons create an Azure Automation Account, import the runbook on
 The runbook only requires `Az.Accounts`. ANF resource reads and writes are handled through ARM REST APIs so the runbook can run on the PowerShell 7.2 Automation runtime without depending on older ANF-specific modules.
 
 The standard ARM deployment experience still provides subscription and resource group pickers for the Automation Account deployment scope. For the ANF target, copy the capacity pool Resource ID from Azure and paste it into `capacityPoolResourceId`; the runbook derives the subscription, resource group, ANF account, and pool names from that single value.
+
+![ANF QoS Mimic Auto proportional throughput allocation](media/qos-mimic-auto-behavior.png)
 
 ## When This Script Applies
 

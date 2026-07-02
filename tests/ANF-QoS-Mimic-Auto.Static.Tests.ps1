@@ -8,14 +8,14 @@ $readmePath = Join-Path $repoRoot 'ANF QoS Mimic Auto/README.md'
 $deployPath = Join-Path $repoRoot 'ANF QoS Mimic Auto/deploy/azuredeploy.json'
 $deployGovPath = Join-Path $repoRoot 'ANF QoS Mimic Auto/deploy/azuredeploy-gov.json'
 $deployGovBadgePath = Join-Path $repoRoot 'ANF QoS Mimic Auto/deploy/deploytoazuregov.svg'
+$behaviorImagePath = Join-Path $repoRoot 'ANF QoS Mimic Auto/media/qos-mimic-auto-behavior.png'
 
 $scriptText = Get-Content -LiteralPath $scriptPath -Raw
 $readmeText = Get-Content -LiteralPath $readmePath -Raw
 $deployText = if (Test-Path -LiteralPath $deployPath) { Get-Content -LiteralPath $deployPath -Raw } else { "" }
 $deployGovText = if (Test-Path -LiteralPath $deployGovPath) { Get-Content -LiteralPath $deployGovPath -Raw } else { "" }
 $deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Content -LiteralPath $deployGovBadgePath -Raw } else { "" }
-$wipBranchPath = 'codex/qos-mimic-auto-modernization'
-$wipBranchPathForDeployUri = 'codex%2Fqos-mimic-auto-modernization'
+$publishedBranchPath = 'main'
 
 function Assert-Contains {
     param(
@@ -78,6 +78,7 @@ Assert-NotContains -Haystack $scriptText -Needle '$anfPoolName = "example-anf-po
 
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure' -Message 'Expected README to expose Deploy to Azure button.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure Gov' -Message 'Expected README to expose Deploy to Azure Gov button.'
+Assert-Contains -Haystack $readmeText -Needle 'media/qos-mimic-auto-behavior.png' -Message 'Expected README to include the QoS Mimic Auto behavior graphic.'
 Assert-Contains -Haystack $readmeText -Needle 'Standard, Premium, Ultra, and Flexible Service Level' -Message 'Expected README to document all service-level support.'
 Assert-Contains -Haystack $readmeText -Needle 'FSL uses the current manual pool throughput' -Message 'Expected README to document FSL throughput budget behavior.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityPoolResourceId` | required |' -Message 'Expected README settings table to document target Resource ID.'
@@ -93,9 +94,9 @@ Assert-Contains -Haystack $deployText -Needle '"ANF_CapacityPoolResourceId"' -Me
 Assert-Contains -Haystack $deployText -Needle '"ANF_MinimumThroughputPerVolume"' -Message 'Expected commercial deploy template to create minimum throughput Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_ConvertToManualMode"' -Message 'Expected commercial deploy template to create conversion Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_TestMode"' -Message 'Expected commercial deploy template to create test mode Automation variable.'
-Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$wipBranchPathForDeployUri%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the current WIP branch template for testing.'
-Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1" -Message 'Expected deploy template to import the runbook from the current WIP branch for testing.'
-Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Mimic%20Auto/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the current WIP branch shared template for testing.'
+Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$publishedBranchPath%2FANF%2520QoS%2520Mimic%2520Auto%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the published main branch template.'
+Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$publishedBranchPath/ANF%20QoS%20Mimic%20Auto/ANF-QoS-Autoscale-MimicAuto.ps1" -Message 'Expected deploy template to import the runbook from the published main branch.'
+Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$publishedBranchPath/ANF%20QoS%20Mimic%20Auto/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the published main branch shared template.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 'Expected Azure Gov badge to use the standard Azure button color.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.NetAppFiles"' -Message 'Expected deploy template not to import Az.NetAppFiles.'
@@ -106,6 +107,10 @@ if ($deployText) {
 }
 if ($deployGovText) {
     $null = $deployGovText | ConvertFrom-Json -ErrorAction Stop
+}
+
+if (-not (Test-Path -LiteralPath $behaviorImagePath)) {
+    throw 'Expected QoS Mimic Auto behavior graphic to exist.'
 }
 
 Write-Output 'ANF-QoS-Mimic-Auto static checks passed.'
