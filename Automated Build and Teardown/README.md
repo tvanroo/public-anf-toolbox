@@ -1,22 +1,100 @@
-# ⚠️ Warning
+# ANF Automated Build and Teardown
 
-**Important Notice:**
+This lab helper creates or deletes an Azure NetApp Files account, one capacity pool, and sequentially named volumes. It supports Standard, Premium, Ultra, and Flexible Service Level capacity pools.
 
-This repository is published publicly as a resource for other Azure NetApp Files (ANF) and Azure specialists. However, please be aware of the following:
+![ANF Automated Build and Teardown behavior](media/auto-build-teardown.png)
 
-1. **Unofficial Content:** Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
-2. **No Endorsement:** While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
-3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
+## Safety Defaults
 
-By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
+- `ANF_TestMode` defaults to `Yes`, so create and delete actions are previewed only.
+- Live delete requires `ANF_TestMode=No` and an exact `ANF_DeleteConfirmation` value.
+- The script is non-interactive. All decisions are supplied as variables so the planned action is visible before the run starts.
+- The resource group must already exist; this script does not create or delete the resource group.
 
-# Download Script:
-[Automated ANF Build & Teardown](https://github.com/tvanroo/public-anf-toolbox/blob/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1)
-    - Quick build/teardown of ANF Account, Capacity Pool, and Volume(s). Variables can be edited to match deployment requirements.
+## Inputs
 
-## GA Safety Notes
+Set these as environment variables before running from Cloud Shell or a local PowerShell session. Azure Automation variables with the same names are also supported, although this script is primarily intended for lab/manual use.
 
-- The script defaults to `$previewOnly = "Yes"`, which lists create or delete actions without changing Azure resources.
-- Live create/delete actions require setting `$previewOnly = "No"`.
-- Delete mode also requires typing the exact confirmation string `DELETE <account>/<pool>` before volumes, the pool, or the ANF account are removed.
-- Create mode remains idempotent for existing accounts, pools, and volume names; existing resources are skipped rather than overwritten.
+| Variable | Default | Impact |
+| --- | --- | --- |
+| `ANF_Operation` | `Create` | `Create` creates or verifies the account, pool, and volumes. `Delete` removes volumes, then pool, then account. |
+| `ANF_TestMode` | `Yes` | `Yes` previews actions only. Set to `No` for live create/delete. |
+| `ANF_DeleteConfirmation` | empty | Required only for live delete. Must exactly equal `DELETE <account>/<pool>`. |
+| `ANF_TenantId` | current context | Optional tenant ID for authentication. |
+| `ANF_SubscriptionId` | current context | Optional subscription ID. |
+| `ANF_ResourceGroupName` | required | Existing resource group that contains or will contain the ANF account. |
+| `ANF_AccountName` | required | ANF account name. |
+| `ANF_PoolName` | required | Capacity pool name. |
+| `ANF_Location` | required | Azure region name, for example `westus2`. |
+| `ANF_ServiceLevel` | `Standard` | `Standard`, `Premium`, `Ultra`, or `Flexible`. |
+| `ANF_QosType` | `Auto` | `Auto` or `Manual` for classic service levels. Flexible is always treated as Manual. |
+| `ANF_PoolSizeTiB` | `1` | Capacity pool size in TiB. |
+| `ANF_FslPoolThroughputMibps` | `128` | Flexible Service Level pool throughput in MiB/s. |
+| `ANF_VolumePrefix` | `Vol` | Prefix for sequential volume names. |
+| `ANF_VolumeCount` | `3` | Number of volumes to create. |
+| `ANF_VolumeSizeGiB` | `60` | Size of each volume in GiB. Regular volumes require at least 50 GiB. |
+| `ANF_VolumeThroughputMibps` | `1` | Per-volume throughput for Manual QoS and Flexible pools. |
+| `ANF_DelegatedSubnetId` | required for create | Delegated subnet Resource ID for volume creation. |
+| `ANF_NetworkFeatures` | `Standard` | Volume network features value. |
+| `ANF_ProtocolTypes` | `NFSv3` | One or more protocol types separated by commas, semicolons, or new lines. |
+| `ANF_IsLargeVolume` | `No` | Set to `Yes` to create large volumes. |
+| `ANF_LargeVolumeMaximumSizeGiB` | `1048576` | Large-volume maximum guardrail. Default is 1 PiB. |
+| `ANF_WaitSleepSeconds` | `30` | Polling interval for create/delete completion checks. |
+| `ANF_WaitMaxSeconds` | `3600` | Maximum wait time for each long-running resource operation. |
+
+## Create Example
+
+```powershell
+$env:ANF_Operation = "Create"
+$env:ANF_TestMode = "Yes"
+$env:ANF_ResourceGroupName = "<resource-group>"
+$env:ANF_AccountName = "<anf-account>"
+$env:ANF_PoolName = "<capacity-pool>"
+$env:ANF_Location = "westus2"
+$env:ANF_ServiceLevel = "Premium"
+$env:ANF_PoolSizeTiB = "2"
+$env:ANF_VolumeCount = "3"
+$env:ANF_VolumeSizeGiB = "100"
+$env:ANF_DelegatedSubnetId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>"
+pwsh ./ANF-Auto-Build-Teardown.ps1
+```
+
+Review the preview output, then set `ANF_TestMode` to `No` for the live create run.
+
+## Flexible Service Level Example
+
+```powershell
+$env:ANF_ServiceLevel = "Flexible"
+$env:ANF_QosType = "Manual"
+$env:ANF_FslPoolThroughputMibps = "128"
+$env:ANF_VolumeThroughputMibps = "10"
+```
+
+Flexible Service Level capacity and throughput are independent. The script sets pool throughput with `ANF_FslPoolThroughputMibps` and volume throughput with `ANF_VolumeThroughputMibps`.
+
+## Delete Example
+
+Preview delete:
+
+```powershell
+$env:ANF_Operation = "Delete"
+$env:ANF_TestMode = "Yes"
+pwsh ./ANF-Auto-Build-Teardown.ps1
+```
+
+Live delete:
+
+```powershell
+$env:ANF_Operation = "Delete"
+$env:ANF_TestMode = "No"
+$env:ANF_DeleteConfirmation = "DELETE <account>/<pool>"
+pwsh ./ANF-Auto-Build-Teardown.ps1
+```
+
+The delete path removes volumes first, then the capacity pool, then the ANF account.
+
+## Notes
+
+- Existing accounts, pools, and matching volume names are skipped during create rather than overwritten.
+- The script uses ARM REST calls and only requires `Az.Accounts`.
+- Use this for disposable test resources only. It is intentionally explicit about delete confirmation because the account and pool are removed in live delete mode.

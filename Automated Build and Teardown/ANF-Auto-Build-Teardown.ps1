@@ -1,200 +1,560 @@
+#!/usr/bin/env pwsh
 <# *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 This repository is published publicly as a resource for other Azure NetApp Files (ANF) and Azure specialists. However, please be aware of the following:
 
-1. **Unofficial Content:** Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
-2. **No Endorsement:** While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
-3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
+1. Unofficial Content: Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
+2. No Endorsement: While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
+3. Use at Your Own Risk: Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
-Last Edit Date: 10/24/2024
+
+Last Edit Date: 07/02/2026
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-This script automates the creation and destruction of an Azure NetApp Files account, capacity pool, and volumes. 
-This is primarily used in testing to quickly destroy and recreate resources.
+Create or delete a small Azure NetApp Files test layout: account, capacity pool, and sequentially named volumes.
+This script is intended for lab/test environments, not production teardown workflows.
 
+Important safety behavior:
+- ANF_TestMode defaults to Yes. In test mode, create/delete actions are only reported.
+- Delete mode with ANF_TestMode=No requires ANF_DeleteConfirmation to exactly match DELETE <account>/<pool>.
+- The script is non-interactive so it can be reviewed, rerun, and automated without hidden prompts.
+
+Supported service levels:
+- Standard, Premium, Ultra, and Flexible.
+- Flexible Service Level always uses Manual QoS and requires a pool throughput value.
+- Large-volume creation can be requested with ANF_IsLargeVolume=Yes.
 #>
 
-# Install az modules and az.netappfiles module
-# Install-Module -Name Az -Force -AllowClobber
-# Install-Module -Name Az.NetAppFiles -Force -AllowClobber
-
-
-# User Editable Variables:
-$tenantId =             "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Tenant ID for the Azure subscription
-$resourceGroupName =    "example-rg"                            # Resource group name where the Azure NetApp Files resources are located
-$anfAccountName =       "example-anf-account"                   # Azure NetApp Files account name
-$anfPoolName =          "example-anf-pool"                      # Azure NetApp Files capacity pool name
-$location =             "westus2"                               # Azure Region in "Name" format. Full list can be found by running "az account list-locations -o table"
-$anfPoolSizeInTiB =     1                                       # Desired Pool Size in TiBs (minimum 1)
-$vol_prefix =           "Vol"                                   # Volumes will be sequentially named Vol1, Vol2, etc. The CreationToken paramater re-uses vol# as well. Existing Volumes with matching Vol# name will be skipped, so if Vol1 already exxists and 2 total Volumes are requested, then only Vol2 would be created, and Vol1 would remain unchanged.
-$vol_qty =              3                                       # Total number of volumes to be created
-$volSizeInGiB =         60                                      # Size in GiB for each Volume. Volumes with Variable sizes are not currently supported. (minimum 50)
-$serviceLevel =         "Standard"                              # "Standard" or "Premium" or "Ultra"
-$delegatedSubnetId =    "/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourceGroups/example-rg/providers/Microsoft.Network/virtualNetworks/example-vnet/subnets/example-sub" # Set delegated subnet id (must exist)
-$previewOnly =          "Yes"                                   # Preview Selector: "Yes", "No"  Yes lists actions, No creates or deletes resources
-
-# Calculations based on User Editable Variables:
-    $volSize = $volSizeInGiB * 1073741824                   # in bytes, 1 GiB = 1073741824 bytes
-    $anfPoolSizeInGiB = $anfPoolSizeInTiB * 1024            # in GiB, 1 TiB = 1024 GiB  
-    $anfPoolSize = $anfPoolSizeInTiB * 1099511627776        # in bytes, 1 TiB = 1099511627776 bytes
-
-
-# Connect to az tenant by id if not  connected
-if (-not (Get-AzContext)) {
-    Connect-AzAccount -TenantId $tenantId
-    Get-AzContext
+$ErrorActionPreference = "Stop"
+$runningInAutomation = $false
+if ($env:AUTOMATION_ASSET_ACCOUNTID) {
+    $runningInAutomation = $true
+    Write-Output "Running in Azure Automation Account: $env:AUTOMATION_ASSET_ACCOUNTID"
 }
 
-if ($previewOnly -eq "Yes") {
-    Write-Host "Script is running in preview mode. Resource create/delete actions will not be performed." -ForegroundColor Green
-} elseif ($previewOnly -eq "No") {
-    Write-Host "Script is running in ***live*** mode. Resource create/delete actions ***will*** be performed." -ForegroundColor Yellow
+Write-Output "Loading required Azure PowerShell modules..."
+$requiredModules = @('Az.Accounts')
+foreach ($module in $requiredModules) {
+    try {
+        Import-Module $module -Force -ErrorAction Stop
+        $moduleInfo = Get-Module $module
+        Write-Output "Successfully imported module: $module (Version: $($moduleInfo.Version))"
+    } catch {
+        Write-Error "Failed to import module $module. Please ensure it is installed."
+        throw "Required module $module is not available"
+    }
+}
+
+function Get-AnfSetting {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter()][object]$Default = $null
+    )
+
+    $value = $null
+    if ($runningInAutomation -and (Get-Command Get-AutomationVariable -ErrorAction SilentlyContinue)) {
+        try {
+            $value = Get-AutomationVariable -Name $Name -ErrorAction SilentlyContinue
+        } catch {
+            $value = $null
+        }
+    }
+
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        $value = [Environment]::GetEnvironmentVariable($Name)
+    }
+
+    if ($null -eq $value -or [string]::IsNullOrWhiteSpace("$value")) {
+        return $Default
+    }
+
+    return $value
+}
+
+function Convert-AnfSettingToInt {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][object]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+
+    try {
+        $converted = [int]$Value
+    } catch {
+        throw "$Name must be an integer. Current value: '$Value'"
+    }
+
+    if ($converted -lt $Minimum) {
+        throw "$Name must be greater than or equal to $Minimum. Current value: '$Value'"
+    }
+
+    return $converted
+}
+
+function Test-AnfYes {
+    param([object]$Value)
+    return "$Value".Trim().Equals("Yes", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-AnfFlexibleServiceLevel {
+    param([object]$ServiceLevel)
+    return "$ServiceLevel".Trim().Equals("Flexible", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Split-AnfSettingList {
+    param([Parameter()][object]$Value)
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace("$Value")) {
+        return @()
+    }
+
+    return @("$Value" -split '[\r\n;,]+' | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+$tenantId = [string](Get-AnfSetting -Name "ANF_TenantId" -Default "")
+$subscriptionId = [string](Get-AnfSetting -Name "ANF_SubscriptionId" -Default "")
+$resourceGroupName = [string](Get-AnfSetting -Name "ANF_ResourceGroupName")
+$anfAccountName = [string](Get-AnfSetting -Name "ANF_AccountName")
+$anfPoolName = [string](Get-AnfSetting -Name "ANF_PoolName")
+$location = [string](Get-AnfSetting -Name "ANF_Location")
+$operation = [string](Get-AnfSetting -Name "ANF_Operation" -Default "Create")
+$testMode = [string](Get-AnfSetting -Name "ANF_TestMode" -Default "Yes")
+$serviceLevel = [string](Get-AnfSetting -Name "ANF_ServiceLevel" -Default "Standard")
+$qosType = [string](Get-AnfSetting -Name "ANF_QosType" -Default "Auto")
+$poolSizeTiB = Convert-AnfSettingToInt -Name "ANF_PoolSizeTiB" -Value (Get-AnfSetting -Name "ANF_PoolSizeTiB" -Default 1) -Minimum 1
+$volumePrefix = [string](Get-AnfSetting -Name "ANF_VolumePrefix" -Default "Vol")
+$volumeCount = Convert-AnfSettingToInt -Name "ANF_VolumeCount" -Value (Get-AnfSetting -Name "ANF_VolumeCount" -Default 3) -Minimum 0
+$volumeSizeGiB = Convert-AnfSettingToInt -Name "ANF_VolumeSizeGiB" -Value (Get-AnfSetting -Name "ANF_VolumeSizeGiB" -Default 60) -Minimum 1
+$delegatedSubnetId = [string](Get-AnfSetting -Name "ANF_DelegatedSubnetId" -Default "")
+$networkFeatures = [string](Get-AnfSetting -Name "ANF_NetworkFeatures" -Default "Standard")
+$protocolTypes = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_ProtocolTypes" -Default "NFSv3"))
+$volumeThroughputMibps = Convert-AnfSettingToInt -Name "ANF_VolumeThroughputMibps" -Value (Get-AnfSetting -Name "ANF_VolumeThroughputMibps" -Default 1) -Minimum 1
+$fslPoolThroughputMibps = Convert-AnfSettingToInt -Name "ANF_FslPoolThroughputMibps" -Value (Get-AnfSetting -Name "ANF_FslPoolThroughputMibps" -Default 128) -Minimum 128
+$isLargeVolumeSetting = [string](Get-AnfSetting -Name "ANF_IsLargeVolume" -Default "No")
+$largeVolumeMaximumSizeGiB = Convert-AnfSettingToInt -Name "ANF_LargeVolumeMaximumSizeGiB" -Value (Get-AnfSetting -Name "ANF_LargeVolumeMaximumSizeGiB" -Default 1048576) -Minimum 51200
+$deleteConfirmation = [string](Get-AnfSetting -Name "ANF_DeleteConfirmation" -Default "")
+$waitSleepSeconds = Convert-AnfSettingToInt -Name "ANF_WaitSleepSeconds" -Value (Get-AnfSetting -Name "ANF_WaitSleepSeconds" -Default 30) -Minimum 1
+$waitMaxSeconds = Convert-AnfSettingToInt -Name "ANF_WaitMaxSeconds" -Value (Get-AnfSetting -Name "ANF_WaitMaxSeconds" -Default 3600) -Minimum 60
+
+$bytesPerGiB = [int64]1073741824
+$bytesPerTiB = [int64]1099511627776
+$anfApiVersion = "2026-04-01"
+
+if ([string]::IsNullOrWhiteSpace($resourceGroupName)) { throw "ANF_ResourceGroupName is required." }
+if ([string]::IsNullOrWhiteSpace($anfAccountName)) { throw "ANF_AccountName is required." }
+if ([string]::IsNullOrWhiteSpace($anfPoolName)) { throw "ANF_PoolName is required." }
+if ([string]::IsNullOrWhiteSpace($location)) { throw "ANF_Location is required." }
+
+$operation = $operation.Trim()
+if ($operation -notin @("Create", "Delete")) {
+    throw "ANF_Operation must be Create or Delete. Current value: '$operation'"
+}
+
+if (-not (Test-AnfYes -Value $testMode) -and -not "$testMode".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "ANF_TestMode must be Yes or No. Current value: '$testMode'"
+}
+
+if ($serviceLevel -notin @("Standard", "Premium", "Ultra", "Flexible")) {
+    throw "ANF_ServiceLevel must be Standard, Premium, Ultra, or Flexible. Current value: '$serviceLevel'"
+}
+
+$isFlexibleServiceLevel = Test-AnfFlexibleServiceLevel -ServiceLevel $serviceLevel
+if ($qosType -notin @("Auto", "Manual")) {
+    throw "ANF_QosType must be Auto or Manual. Current value: '$qosType'"
+}
+
+if ($isFlexibleServiceLevel -and $qosType -ne "Manual") {
+    Write-Warning "Flexible Service Level requires Manual QoS. ANF_QosType '$qosType' will be treated as Manual."
+    $qosType = "Manual"
+}
+
+if (Test-AnfYes -Value $isLargeVolumeSetting) {
+    $minimumVolumeSizeGiB = 51200
+    if ($volumeSizeGiB -lt $minimumVolumeSizeGiB) {
+        throw "ANF_IsLargeVolume is Yes, so ANF_VolumeSizeGiB must be at least $minimumVolumeSizeGiB GiB."
+    }
+    if ($volumeSizeGiB -gt $largeVolumeMaximumSizeGiB) {
+        throw "ANF_VolumeSizeGiB exceeds ANF_LargeVolumeMaximumSizeGiB ($largeVolumeMaximumSizeGiB GiB)."
+    }
 } else {
-    Write-Host "Preview Selector is not set to Yes or No. Exiting Script." -ForegroundColor Red
-    exit
+    if ($volumeSizeGiB -lt 50) {
+        throw "Regular ANF volumes must be at least 50 GiB."
+    }
 }
 
-# Ask user to choose the "Create ANF Resources" or "Delete ANF Resources" option.
-Write-Host "Tenant ID: " $tenantId
-Write-Host "Resource Group Name: " $resourceGroupName
-Write-Host "ANF Account Name: " $anfAccountName
-Write-Host "ANF Pool Name: " $anfPoolName
-Write-Host " "
-Write-Host "Choose an option:"
-Write-Host "1. Create ANF Resources"
-Write-Host "2. Delete ANF Resources"
-$option = Read-Host "Enter the option number"
+if ($operation -eq "Create" -and [string]::IsNullOrWhiteSpace($delegatedSubnetId)) {
+    throw "ANF_DelegatedSubnetId is required for Create operations."
+}
 
-# If user selects 1, run the following script to create the ANF resources
-if ($option -eq 1) {
-    Write-Host "You have selected to create ANF Resources"
-    $expectedTime = [math]::Round(($vol_qty * 0.5) + 6.5)
-    Write-Host "This creation process should take approximately $expectedTime minutes to complete" -ForegroundColor Yellow
-    if ($previewOnly -eq "Yes") {
-        Write-Host "PREVIEW ONLY: Create operations will be listed but not performed." -ForegroundColor Green
-    }
+$poolSizeBytes = [int64]$poolSizeTiB * $bytesPerTiB
+$volumeSizeBytes = [int64]$volumeSizeGiB * $bytesPerGiB
+$accountResourceId = $null
+$poolResourceId = $null
 
-    # Identify total size of any existing volumes within the pool
-    $existingVolSize = 0
-    # If existing ANF Volume(s) exist, get them and add their size to $existingVolSize, if not, add 0 to $existingVolSize
-    if (Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction SilentlyContinue) {
-        $existingVolumes = Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
-        foreach ($vol in $existingVolumes) {
-            $existingVolSize += $vol.UsageThreshold
+Write-Output "=== ANF Auto Build/Teardown Configuration ==="
+Write-Output "Operation: $operation"
+Write-Output "Test Mode: $testMode"
+Write-Output "Resource Group: $resourceGroupName"
+Write-Output "ANF Account: $anfAccountName"
+Write-Output "Capacity Pool: $anfPoolName"
+Write-Output "Location: $location"
+Write-Output "Service Level: $serviceLevel"
+Write-Output "QoS Type: $qosType"
+Write-Output "Pool Size: $poolSizeTiB TiB"
+Write-Output "Volumes: $volumeCount x $volumeSizeGiB GiB, prefix '$volumePrefix'"
+Write-Output "Large Volumes: $isLargeVolumeSetting"
+if ($isFlexibleServiceLevel) {
+    Write-Output "FSL Pool Throughput: $fslPoolThroughputMibps MiB/s"
+}
+if ($qosType -eq "Manual") {
+    Write-Output "Volume Throughput: $volumeThroughputMibps MiB/s"
+}
+
+if (Test-AnfYes -Value $testMode) {
+    Write-Output "Running in TEST MODE - no Azure resources will be created or deleted"
+} else {
+    Write-Output "Running in LIVE MODE - Azure resources may be created or deleted"
+}
+
+function Invoke-AnfArmJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$QueryString = "",
+        [Parameter()][string]$BodyJson
+    )
+
+    $context = Get-AzContext -ErrorAction Stop
+    $resourceManagerUrl = $context.Environment.ResourceManagerUrl.TrimEnd('/')
+    $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate(
+        $context.Account,
+        $context.Environment,
+        $context.Tenant.Id,
+        $null,
+        "Never",
+        $null,
+        "$resourceManagerUrl/"
+    ).AccessToken
+
+    $normalizedQueryString = ""
+    if ($QueryString) {
+        $normalizedQueryString = "$QueryString"
+        if ($normalizedQueryString.StartsWith("?")) {
+            $normalizedQueryString = "&$($normalizedQueryString.Substring(1))"
+        } elseif (-not $normalizedQueryString.StartsWith("&")) {
+            $normalizedQueryString = "&$normalizedQueryString"
         }
-    } else {
-        $existingVolSize = 0
-    }
-    # Convert total volume(s) size to GiB for display
-        $existingVolSizeGiB = $existingVolSize / 1073741824
-        $additionaVolumeTotalSize = ($vol_qty * $volSize) / 1073741824  
-        $totalVolumeSize = $existingVolSizeGiB + $additionaVolumeTotalSize
-
-    # If existing volume size + new volumes total size exceeds total pool size, notify and exit. If not, notify on total proposed volume size
-    if ($totalVolumeSize -gt $anfPoolSizeInGiB) {
-        Write-Host "Total volume size exceeds pool size of ${anfPoolSizeInGiB} GiB: $existingVolSizeGiB GiB Existing + $additionaVolumeTotalSize GiB New = $totalVolumeSize GiB, exiting..." -ForegroundColor Red
-        exit
-    } else {
-        $totalVolSize = $existingVolSizeGiB + ($vol_qty * $volSizeInGiB)
-        Write-Host "New Total Volume Size: $existingVolSizeGiB GiB Existing + $additionaVolumeTotalSize GiB New = $totalVolumeSize GiB (assuming no existing volume names overlap with new volume names, with overlap the total will be lower.)" -ForegroundColor Green
     }
 
-    # Check for RG and create if not present, with output for debugging
-    if (-not (Get-AzResourceGroup -Name $resourceGroupName -ErrorAction SilentlyContinue)) {
-        Write-Host "Resource Group $resourceGroupName not found, exiting."  -ForegroundColor Red
-        exit
-    } 
+    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion$normalizedQueryString"
+    $headers = @{
+        'Authorization' = "Bearer $token"
+        'Content-Type' = 'application/json'
+    }
 
-    # Check for ANF account and create if not present, with output for debugging
-    if (-not (Get-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -ErrorAction SilentlyContinue)) {
-        if ($previewOnly -eq "Yes") {
-            Write-Host "PREVIEW ONLY: Would create ANF Account $anfAccountName in $resourceGroupName" -ForegroundColor Yellow
-        } else {
-            Write-Host "Creating ANF Account $anfAccountName in $resourceGroupName" -ForegroundColor Yellow
-            New-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName -Location $location > $null
-            Write-Host "Account $anfAccountName created" -ForegroundColor Green
+    if ($BodyJson) {
+        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $BodyJson -ErrorAction Stop
+    }
+
+    return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+}
+
+function Get-AnfResourceOrNull {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion
+    )
+
+    try {
+        return Invoke-AnfArmJson -Method "GET" -ResourceId $ResourceId -ApiVersion $ApiVersion
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+            return $null
         }
-    } else {
-        Write-Host "ANF Account $anfAccountName already exists in $resourceGroupName" -ForegroundColor Green
-    }
 
-    # Check for ANF Capacity Pool and create if not present, with output for debugging
-    if (-not (Get-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -ErrorAction SilentlyContinue)) {
-        if ($previewOnly -eq "Yes") {
-            Write-Host "PREVIEW ONLY: Would create ANF Capacity Pool $anfPoolName in $anfAccountName" -ForegroundColor Yellow
-        } else {
-            Write-Host "Creating ANF Capacity Pool $anfPoolName in $anfAccountName" -ForegroundColor Yellow
-            New-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName -Location $location -ServiceLevel "Standard" -PoolSize $anfPoolSize > $null
-            Write-Host "Capacity Pool $anfPoolName created" -ForegroundColor Green
+        if ($_.ErrorDetails.Message -match '"code"\s*:\s*"ResourceNotFound"') {
+            return $null
         }
-    } else {
-        Write-Host "ANF Capacity Pool $anfPoolName already exists in $anfAccountName" -ForegroundColor Green
+
+        throw
+    }
+}
+
+function New-AnfResourceId {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter()][string]$AccountName,
+        [Parameter()][string]$PoolName,
+        [Parameter()][string]$VolumeName
+    )
+
+    $resourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName"
+    if ($AccountName) {
+        $resourceId = "$resourceId/providers/Microsoft.NetApp/netAppAccounts/$AccountName"
+    }
+    if ($PoolName) {
+        $resourceId = "$resourceId/capacityPools/$PoolName"
+    }
+    if ($VolumeName) {
+        $resourceId = "$resourceId/volumes/$VolumeName"
     }
 
-    # Create volume(s) in the capacity pool based on $vol_qty, with output for debugging
-    for ($i = 1; $i -le $vol_qty; $i++) {
-        $volName = $vol_prefix + $i
-        if (-not (Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -ErrorAction SilentlyContinue)) {
-            if ($previewOnly -eq "Yes") {
-                Write-Host "PREVIEW ONLY: Would create ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
-            } else {
-                Write-Host "Creating ANF Volume $volName in $anfPoolName" -ForegroundColor Yellow
-                New-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $volName -Location $location -ServiceLevel $serviceLevel -UsageThreshold $volSize -SubnetId $delegatedSubnetId -CreationToken $volName -NetworkFeature Standard > $null
-                Write-Host "Volume $volName created" -ForegroundColor Green
+    return $resourceId
+}
+
+function Wait-AnfProvisioningState {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$DesiredState = "Succeeded",
+        [Parameter()][switch]$WaitForDelete
+    )
+
+    $deadline = (Get-Date).AddSeconds($waitMaxSeconds)
+    do {
+        $resource = Get-AnfResourceOrNull -ResourceId $ResourceId -ApiVersion $ApiVersion
+        if ($WaitForDelete) {
+            if ($null -eq $resource) {
+                return
             }
-        } else {
-            Write-Host "ANF Volume $volName already exists in $anfPoolName" -ForegroundColor Green
+        } elseif ($resource -and $resource.properties -and $resource.properties.provisioningState -eq $DesiredState) {
+            return
+        }
+
+        if ((Get-Date) -gt $deadline) {
+            if ($WaitForDelete) {
+                throw "Timed out waiting for resource deletion: $ResourceId"
+            }
+            $state = if ($resource -and $resource.properties) { $resource.properties.provisioningState } else { "not found" }
+            throw "Timed out waiting for provisioning state '$DesiredState' on $ResourceId. Current state: $state"
+        }
+
+        Start-Sleep -Seconds $waitSleepSeconds
+    } while ($true)
+}
+
+function New-AnfAccountBodyJson {
+    return @{
+        location = $location
+        properties = @{}
+        tags = @{
+            "managed-by" = "public-anf-toolbox"
+            "solution" = "anf-auto-build-teardown"
+        }
+    } | ConvertTo-Json -Depth 6
+}
+
+function New-AnfPoolBodyJson {
+    $properties = @{
+        serviceLevel = $serviceLevel
+        size = $poolSizeBytes
+        qosType = $qosType
+    }
+
+    if ($isFlexibleServiceLevel) {
+        $properties.customThroughputMibps = $fslPoolThroughputMibps
+    }
+
+    return @{
+        location = $location
+        properties = $properties
+        tags = @{
+            "managed-by" = "public-anf-toolbox"
+            "solution" = "anf-auto-build-teardown"
+        }
+    } | ConvertTo-Json -Depth 8
+}
+
+function New-AnfVolumeBodyJson {
+    param([Parameter(Mandatory=$true)][string]$VolumeName)
+
+    $properties = @{
+        creationToken = $VolumeName
+        serviceLevel = $serviceLevel
+        subnetId = $delegatedSubnetId
+        usageThreshold = $volumeSizeBytes
+        networkFeatures = $networkFeatures
+        protocolTypes = $protocolTypes
+    }
+
+    if ($qosType -eq "Manual") {
+        $properties.throughputMibps = $volumeThroughputMibps
+    }
+
+    if (Test-AnfYes -Value $isLargeVolumeSetting) {
+        $properties.isLargeVolume = $true
+    }
+
+    return @{
+        location = $location
+        properties = $properties
+        tags = @{
+            "managed-by" = "public-anf-toolbox"
+            "solution" = "anf-auto-build-teardown"
+        }
+    } | ConvertTo-Json -Depth 8
+}
+
+Write-Output "Authenticating to Azure..."
+try {
+    try {
+        $null = Disable-AzContextAutosave -Scope Process -ErrorAction Stop
+    } catch {
+        Write-Warning "Unable to disable Az context autosave: $($_.Exception.Message)"
+    }
+
+    if ($runningInAutomation) {
+        $null = Connect-AzAccount -Identity -ErrorAction Stop
+    } else {
+        try {
+            $currentContext = Get-AzContext -ErrorAction Stop
+            if ($currentContext -and $currentContext.Account -and $currentContext.Account.Id) {
+                if ($tenantId -and $currentContext.Tenant.Id -ne $tenantId) {
+                    $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+                }
+            } else {
+                if ($tenantId) {
+                    $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+                } else {
+                    $null = Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop
+                }
+            }
+        } catch {
+            if ($tenantId) {
+                $null = Connect-AzAccount -UseDeviceAuthentication -TenantId $tenantId -ErrorAction Stop
+            } else {
+                $null = Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop
+            }
         }
     }
 
-} elseif ($option -eq 2) {
-    Write-Host "You have selected to delete ANF Resources"
-    
-    # List all volumes within the capacity pool
-    $volumes = @(Get-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -ErrorAction SilentlyContinue)
-    $expectedTime = [math]::Round(($volumes.count * 0.5) + 2.5)
-    Write-Host "This delete process should take approximately $expectedTime minutes to complete" -ForegroundColor Yellow
-    
-    # For each volume in volumes, write volume name to Write-Host
-    foreach ($vol in $volumes) {
-        Write-Host $vol.CreationToken "to be deleted" -ForegroundColor Red
+    if ([string]::IsNullOrWhiteSpace($subscriptionId)) {
+        $subscriptionId = (Get-AzContext).Subscription.Id
+    } else {
+        $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
     }
 
-    if ($previewOnly -eq "Yes") {
-        Write-Host "PREVIEW ONLY: Would delete all listed volumes, then capacity pool $anfPoolName, then ANF account $anfAccountName." -ForegroundColor Yellow
-        Write-Host "Set previewOnly to No and re-run to perform deletion." -ForegroundColor Yellow
-        exit
-    }
-
-    $expectedConfirmation = "DELETE $anfAccountName/$anfPoolName"
-    $confirmation = Read-Host "Type '$expectedConfirmation' to continue"
-    if ($confirmation -ne $expectedConfirmation) {
-        Write-Host "Confirmation did not match. No resources were deleted." -ForegroundColor Red
-        exit
-    }
-
-    # Delete all volumes in the capacity pool
-    foreach ($vol in $volumes) {
-        Remove-AzNetAppFilesVolume -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -Name $vol.CreationToken
-        Write-Host $vol.CreationToken "deleted" -ForegroundColor Green
-    }
-    Write-Host "All volumes in the Capacity Pool $anfPoolName have been deleted" -ForegroundColor Yellow
-
-    # Delete the Capacity Pool
-    Write-Host "Deleting Capacity Pool" $anfPoolName -ForegroundColor Red
-    Remove-AzNetAppFilesPool -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -Name $anfPoolName
-    Write-Host $anfPoolName "deleted" -ForegroundColor Green
-
-    # Delete the ANF Account
-    Write-Host "Deleting ANF Account" $anfAccountName -ForegroundColor Red
-    Remove-AzNetAppFilesAccount -ResourceGroupName $resourceGroupName -Name $anfAccountName
-    Write-Host $anfAccountName "deleted" -ForegroundColor Green 
-
-} else {
-    Write-Host "You have selected an invalid option"
-    exit
+    Write-Output "Azure Context: $((Get-AzContext).Account.Id) in subscription $((Get-AzContext).Subscription.Name)"
+} catch {
+    Write-Error "Failed to authenticate to Azure: $_"
+    throw "Authentication failed"
 }
 
+$resourceGroupResourceId = New-AnfResourceId -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName
+$accountResourceId = New-AnfResourceId -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName
+$poolResourceId = New-AnfResourceId -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName
+
+if (-not (Get-AnfResourceOrNull -ResourceId $resourceGroupResourceId -ApiVersion "2021-04-01")) {
+    throw "Resource group '$resourceGroupName' was not found in subscription '$subscriptionId'. Create the resource group before running this script."
+}
+
+if ($operation -eq "Create") {
+    $existingVolumeBytes = [int64]0
+    $existingVolumes = @()
+    $existingPool = Get-AnfResourceOrNull -ResourceId $poolResourceId -ApiVersion $anfApiVersion
+    if ($existingPool) {
+        $volumesResponse = Get-AnfResourceOrNull -ResourceId "$poolResourceId/volumes" -ApiVersion $anfApiVersion
+        if ($volumesResponse -and $volumesResponse.value) {
+            $existingVolumes = @($volumesResponse.value)
+            foreach ($existingVolume in $existingVolumes) {
+                if ($existingVolume.properties.usageThreshold) {
+                    $existingVolumeBytes += [int64]$existingVolume.properties.usageThreshold
+                }
+            }
+        }
+    }
+
+    $requestedVolumeBytes = [int64]$volumeCount * $volumeSizeBytes
+    if (($existingVolumeBytes + $requestedVolumeBytes) -gt $poolSizeBytes) {
+        throw "Requested volume capacity exceeds target pool size. Existing=$([math]::Round($existingVolumeBytes / $bytesPerGiB, 0)) GiB, Requested=$([math]::Round($requestedVolumeBytes / $bytesPerGiB, 0)) GiB, Pool=$($poolSizeTiB * 1024) GiB."
+    }
+
+    if (Test-AnfYes -Value $testMode) {
+        Write-Output "TEST MODE: Would create or verify ANF account: $accountResourceId"
+        Write-Output "TEST MODE: Would create or verify capacity pool: $poolResourceId"
+        for ($i = 1; $i -le $volumeCount; $i++) {
+            $volumeName = "$volumePrefix$i"
+            Write-Output "TEST MODE: Would create or verify volume: $volumeName"
+        }
+        return
+    }
+
+    if (-not (Get-AnfResourceOrNull -ResourceId $accountResourceId -ApiVersion $anfApiVersion)) {
+        Write-Output "Creating ANF account '$anfAccountName'..."
+        $null = Invoke-AnfArmJson -Method "PUT" -ResourceId $accountResourceId -ApiVersion $anfApiVersion -BodyJson (New-AnfAccountBodyJson)
+        Wait-AnfProvisioningState -ResourceId $accountResourceId -ApiVersion $anfApiVersion
+    } else {
+        Write-Output "ANF account '$anfAccountName' already exists."
+    }
+
+    if (-not (Get-AnfResourceOrNull -ResourceId $poolResourceId -ApiVersion $anfApiVersion)) {
+        Write-Output "Creating capacity pool '$anfPoolName'..."
+        $null = Invoke-AnfArmJson -Method "PUT" -ResourceId $poolResourceId -ApiVersion $anfApiVersion -BodyJson (New-AnfPoolBodyJson)
+        Wait-AnfProvisioningState -ResourceId $poolResourceId -ApiVersion $anfApiVersion
+    } else {
+        Write-Output "Capacity pool '$anfPoolName' already exists."
+    }
+
+    for ($i = 1; $i -le $volumeCount; $i++) {
+        $volumeName = "$volumePrefix$i"
+        $volumeResourceId = New-AnfResourceId -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -VolumeName $volumeName
+        if (-not (Get-AnfResourceOrNull -ResourceId $volumeResourceId -ApiVersion $anfApiVersion)) {
+            Write-Output "Creating volume '$volumeName'..."
+            $null = Invoke-AnfArmJson -Method "PUT" -ResourceId $volumeResourceId -ApiVersion $anfApiVersion -BodyJson (New-AnfVolumeBodyJson -VolumeName $volumeName)
+            Wait-AnfProvisioningState -ResourceId $volumeResourceId -ApiVersion $anfApiVersion
+        } else {
+            Write-Output "Volume '$volumeName' already exists."
+        }
+    }
+
+    Write-Output "ANF create workflow completed."
+    return
+}
+
+if ($operation -eq "Delete") {
+    $expectedConfirmation = "DELETE $anfAccountName/$anfPoolName"
+    $volumesResponse = Get-AnfResourceOrNull -ResourceId "$poolResourceId/volumes" -ApiVersion $anfApiVersion
+    $volumes = if ($volumesResponse -and $volumesResponse.value) { @($volumesResponse.value) } else { @() }
+
+    if (Test-AnfYes -Value $testMode) {
+        Write-Output "TEST MODE: Would delete $($volumes.Count) volume(s), capacity pool '$anfPoolName', and ANF account '$anfAccountName'."
+        foreach ($volume in $volumes) {
+            Write-Output "TEST MODE: Would delete volume: $($volume.name)"
+        }
+        Write-Output "TEST MODE: Live delete requires ANF_TestMode=No and ANF_DeleteConfirmation='$expectedConfirmation'."
+        return
+    }
+
+    if ($deleteConfirmation -ne $expectedConfirmation) {
+        throw "Live delete requires ANF_DeleteConfirmation to exactly equal '$expectedConfirmation'. Current value: '$deleteConfirmation'"
+    }
+
+    foreach ($volume in $volumes) {
+        Write-Output "Deleting volume '$($volume.name)'..."
+        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $volume.id -ApiVersion $anfApiVersion
+        Wait-AnfProvisioningState -ResourceId $volume.id -ApiVersion $anfApiVersion -WaitForDelete
+    }
+
+    if (Get-AnfResourceOrNull -ResourceId $poolResourceId -ApiVersion $anfApiVersion) {
+        Write-Output "Deleting capacity pool '$anfPoolName'..."
+        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $poolResourceId -ApiVersion $anfApiVersion
+        Wait-AnfProvisioningState -ResourceId $poolResourceId -ApiVersion $anfApiVersion -WaitForDelete
+    } else {
+        Write-Output "Capacity pool '$anfPoolName' was not found."
+    }
+
+    if (Get-AnfResourceOrNull -ResourceId $accountResourceId -ApiVersion $anfApiVersion) {
+        Write-Output "Deleting ANF account '$anfAccountName'..."
+        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $accountResourceId -ApiVersion $anfApiVersion
+        Wait-AnfProvisioningState -ResourceId $accountResourceId -ApiVersion $anfApiVersion -WaitForDelete
+    } else {
+        Write-Output "ANF account '$anfAccountName' was not found."
+    }
+
+    Write-Output "ANF delete workflow completed."
+}
