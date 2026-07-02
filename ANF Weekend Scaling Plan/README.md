@@ -1,4 +1,4 @@
-# ⚠️ Warning
+# Warning
 
 **Important Notice:**
 
@@ -10,13 +10,80 @@ This repository is published publicly as a resource for other Azure NetApp Files
 
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 
-# Download Script:
-[ANF Weekend Scaling Plan](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Weekend%20Scaling%20Plan/anf-weekend-scaling-plan.ps1)
-    - Moves volumes between weekday and weekend pools to shift service levels for scheduled cost savings.
+## WIP Download And Deployment
+
+This modernization is on the `codex/weekend-scaling-modernization` branch for testing.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fweekend-scaling-modernization%2FANF%2520Weekend%2520Scaling%2520Plan%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fweekend-scaling-modernization%2FANF%2520Weekend%2520Scaling%2520Plan%2Fdeploy%2Fazuredeploy-gov.json)
+
+[ANF Weekend Scaling Plan](./anf-weekend-scaling-plan.ps1)
+    - Moves volumes between weekday and weekend Auto QoS pools to shift classic service levels for scheduled cost savings.
+
+The deployment buttons create an Azure Automation Account, import the runbook on the PowerShell 7.2 runtime, create editable `ANF_*` Automation variables, assign the managed identity `Azure NetApp Files Administrator` at the target ANF account scope derived from the initial capacity pool Resource ID, and schedule the runbook hourly. The Automation Account is deployed into the resource group selected in the portal. The RBAC assignment is deployed separately into the ANF account resource group parsed from `capacityPoolResourceId`, so the ANF account does not need to be in the same resource group as the Automation Account.
+
+The runbook only requires `Az.Accounts`. ANF resource reads, pool creation, volume pool moves, and pool deletion are handled through ARM REST APIs so the runbook can run on the PowerShell 7.2 Automation runtime without depending on older ANF-specific modules.
+
+![ANF Weekend Scaling Plan volume pool movement](media/weekend-scaling-plan.png)
+
+## When This Script Applies
+
+This script supports Standard, Premium, and Ultra Auto QoS capacity pools only.
+
+The script is intended for environments that want to move volumes into a lower-cost classic service level over the weekend and back to a higher-performance classic service level for weekdays. It creates the missing target pool by copying the active pool's size and core pool settings, changes the service level to the configured weekday or weekend value, moves volumes with the ANF `poolChange` REST action, and removes the previous source pool after the move requests complete.
+
+Flexible Service Level is intentionally excluded. FSL throughput is independent from capacity and throughput decreases can be limited by a 24-hour cooldown after an increase, which does not match this pool-move weekend schedule.
+
+Manual QoS is also intentionally excluded. This script is Auto QoS only and does not assign per-volume throughput after a move.
+
+## Current Settings
+
+Settings can be supplied as Azure Automation variables or as Cloud Shell/local process environment variables using the same `ANF_*` names.
+
+| Setting | Default | Used for |
+| --- | --- | --- |
+| `ANF_TenantId` | deployment tenant | Optional tenant selection. |
+| `ANF_CapacityPoolResourceId` | required | One or more initial capacity pool Resource IDs. The initial pool may be removed after the first successful move; the Resource ID still identifies the subscription, resource group, ANF account, and initial pool name for the managed pool set. Multiple IDs can be separated by new lines, semicolons, or commas. |
+| `ANF_TestMode` | `Yes` | `Yes` previews only; `No` creates the target pool, moves volumes, and removes the previous source pool. This must be `No` before any live changes are written. |
+| `ANF_WeekdayPoolName` | blank | Weekday target pool name. Blank uses `<initial-pool>-weekday`. |
+| `ANF_WeekendPoolName` | blank | Weekend target pool name. Blank uses `<initial-pool>-weekend`. |
+| `ANF_WeekdayServiceLevel` | `Ultra` | Classic service level for the weekday pool. |
+| `ANF_WeekendServiceLevel` | `Standard` | Classic service level for the weekend pool. |
+| `ANF_WeekendStartDay` | `Friday` | Day when the weekend window begins. |
+| `ANF_WeekendStartTime` | `18:00` | Time when the weekend window begins, in `HH:mm` format. |
+| `ANF_WeekendFullDays` | `Saturday,Sunday` | Comma-separated days that are entirely treated as weekend. |
+| `ANF_WeekendEndDay` | `Monday` | Day when the weekend window ends. |
+| `ANF_WeekendEndTime` | `06:00` | Time when the weekend window ends, in `HH:mm` format. |
+| `ANF_TimeZone` | `Central Standard Time` | Time zone used by the runbook to evaluate the schedule. |
+
+## Behavior
+
+- The runbook detects whether the current localized time is inside the weekend window.
+- The active pool is whichever one of the initial, weekday, or weekend pools currently contains volumes.
+- If more than one managed pool currently contains volumes, the runbook stops to avoid ambiguous moves.
+- If no volumes are found in the initial, weekday, or weekend pools, the runbook exits with a clear error instead of looping.
+- If the active pool already matches the schedule, no pool creation, move, or deletion is attempted.
+- In live mode, the target pool is created first when it does not already exist.
+- Volumes are moved with the ANF `poolChange` REST action.
+- The previous source pool is removed only after the volume move requests complete.
+- Flexible Service Level pools and Manual QoS pools are rejected before changes are planned.
+
+## Multiple Pool Sets
+
+To manage more than one initial pool set from the same Automation Account, edit `ANF_CapacityPoolResourceId` after deployment and paste each full initial capacity pool Resource ID into the value. Separate multiple IDs with new lines, semicolons, or commas.
+
+Each configured pool set is processed independently. For every configured initial pool Resource ID, the runbook re-reads the subscription, resource group, ANF account, initial pool, weekday pool, weekend pool, volume placement, service levels, and QoS type before calculating changes. There is no pool state, volume placement, or schedule math shared across pool sets.
+
+The policy variables above are shared across all pool sets in the same Automation Account. Deploy a second Automation Account when different pool sets need different target service levels, pool names, or weekend windows.
+
+The initial deployment assigns the Automation Account managed identity to the ANF account parsed from the Resource ID entered during deployment. If you later add pool Resource IDs from other ANF accounts or subscriptions, grant that same managed identity `Azure NetApp Files Administrator` on each additional target ANF account before expecting those pool sets to run successfully.
+
+## Permissions
+
+The deployer must be allowed to deploy into the target ANF account resource group and create role assignments at the target ANF account scope, for example through Owner or User Access Administrator permissions plus deployment rights on that resource group. Without `Microsoft.Authorization/roleAssignments/write` on that target scope, the Automation Account can still be created but automatic RBAC assignment will fail.
 
 ## GA Safety Notes
 
-- The script defaults to `$testMode = "Yes"`, which lists planned pool creation, volume moves, and old-pool deletion without changing Azure resources.
-- Live changes require setting `$testMode = "No"`.
-- Re-runs inspect the initial, weekend, and weekday pools first. If the volumes are already in the correct pool for the current schedule, no move or delete action is attempted.
-- Pool deletion is only reached after the replacement pool is created and volumes are moved in live mode.
+- The script defaults to test mode. `ANF_TestMode` must be set to `No` before any pool creation, volume move, or pool removal is attempted.
+- Start with one pool set and confirm test-mode output before enabling live mode.
+- Leave enough time for ANF volume pool changes to complete before assuming all moved volumes are available in the target service level.
