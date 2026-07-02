@@ -30,15 +30,17 @@ Reruns:
 
 [CmdletBinding()]
 param(
-    [Parameter()]
-    [string]$SourcePath = "\\xyz.file.core.windows.net\xyz",
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$SourcePath,
 
-    [Parameter()]
-    [string]$DestinationPath = "\\ANF-xyz.abc.gov\xyz-prod-001-anf-vol1-profiles",
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$DestinationPath,
 
     [Parameter()]
     [AllowNull()]
-    [string]$FilterString = "Ssdfgsdfhsdfh",
+    [string]$FilterString = $null,
 
     [Parameter()]
     [switch]$DeleteSourceAfterVerifiedCopy,
@@ -52,6 +54,34 @@ param(
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
+
+function Assert-AvdMigrationRuntime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [bool]$RequireBits
+    )
+
+    $isWindowsHost = $true
+    $isWindowsVariable = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue
+    if ($null -ne $isWindowsVariable) {
+        $isWindowsHost = [bool]$isWindowsVariable.Value
+    }
+    elseif ($PSVersionTable.PSEdition -eq 'Core') {
+        $isWindowsHost = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    }
+
+    if (-not $isWindowsHost) {
+        if ($RequireBits) {
+            throw 'Live copy mode requires a Windows VM or Windows host with access to both SMB shares.'
+        }
+
+        Write-Warning 'Dry run is running on a non-Windows host. Live copy mode requires a Windows VM or Windows host with BITS and access to both SMB shares.'
+    }
+
+    if ($RequireBits -and -not (Get-Command -Name Start-BitsTransfer -ErrorAction SilentlyContinue)) {
+        throw 'Live copy mode requires the Start-BitsTransfer cmdlet. Run from a Windows VM or Windows host where BITS is available.'
+    }
+}
 
 function Resolve-DirectoryPath {
     param(
@@ -134,6 +164,122 @@ function Test-VerifiedCopy {
     return ($sourceHash.Hash -eq $destinationHash.Hash -and $sourceSize -eq $destinationSize)
 }
 
+function New-StagedDestinationFilePath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath,
+
+        [Parameter()]
+        [string]$Purpose = 'copy'
+    )
+
+    $destinationDirectory = Split-Path -Path $DestinationFilePath -Parent
+    $destinationFileName = Split-Path -Path $DestinationFilePath -Leaf
+    $safePurpose = $Purpose -replace '[^A-Za-z0-9-]', '-'
+    $uniqueSuffix = [guid]::NewGuid().ToString('N')
+
+    return (Join-Path -Path $destinationDirectory -ChildPath ".$destinationFileName.anfmove-$safePurpose-$uniqueSuffix.tmp")
+}
+
+function Remove-FailedCopyArtifact {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        return
+    }
+
+    if ($KeepFailedDestinationFiles) {
+        Write-Host "Keeping failed $Description for inspection: $FilePath" -ForegroundColor Yellow
+        return
+    }
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: Would remove failed $Description`: $FilePath" -ForegroundColor Red
+        return
+    }
+
+    Remove-Item -LiteralPath $FilePath -Force
+    Write-Host "Removed failed $Description`: $FilePath" -ForegroundColor Red
+}
+
+function Restore-BackupFileIfPresent {
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [string]$BackupFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BackupFilePath) -or -not (Test-Path -LiteralPath $BackupFilePath -PathType Leaf)) {
+        return
+    }
+
+    Move-Item -LiteralPath $BackupFilePath -Destination $DestinationFilePath -Force
+    Write-Host "Restored previous destination file after failed replacement: $DestinationFilePath" -ForegroundColor Yellow
+}
+
+function Remove-BackupFileIfPresent {
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [string]$BackupFilePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($BackupFilePath) -or -not (Test-Path -LiteralPath $BackupFilePath -PathType Leaf)) {
+        return
+    }
+
+    Remove-Item -LiteralPath $BackupFilePath -Force
+}
+
+function Copy-FileMetadataFromSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath
+    )
+
+    $sourceItem = Get-Item -LiteralPath $SourceFilePath -Force
+    $destinationItem = Get-Item -LiteralPath $DestinationFilePath -Force
+    $sourceAcl = Get-Acl -LiteralPath $SourceFilePath
+
+    Set-Acl -LiteralPath $DestinationFilePath -AclObject $sourceAcl
+
+    $destinationItem.CreationTimeUtc = $sourceItem.CreationTimeUtc
+    $destinationItem.LastWriteTimeUtc = $sourceItem.LastWriteTimeUtc
+    $destinationItem.LastAccessTimeUtc = $sourceItem.LastAccessTimeUtc
+    $destinationItem.Attributes = $sourceItem.Attributes
+}
+
+function Move-StagedFileIntoPlace {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StagedDestinationFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationFilePath
+    )
+
+    if (Test-Path -LiteralPath $DestinationFilePath -PathType Leaf) {
+        $backupFilePath = New-StagedDestinationFilePath -DestinationFilePath $DestinationFilePath -Purpose 'backup'
+        [System.IO.File]::Replace($StagedDestinationFilePath, $DestinationFilePath, $backupFilePath, $true)
+        return $backupFilePath
+    }
+
+    Move-Item -LiteralPath $StagedDestinationFilePath -Destination $DestinationFilePath -Force
+    return $null
+}
+
 function Remove-SourceFileIfRequested {
     param(
         [Parameter(Mandatory = $true)]
@@ -152,25 +298,6 @@ function Remove-SourceFileIfRequested {
 
     Remove-Item -LiteralPath $SourceFilePath -Force
     Write-Host "Deleted verified source file: $SourceFilePath" -ForegroundColor Yellow
-}
-
-function Remove-DestinationFileIfFailed {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$DestinationFilePath
-    )
-
-    if ($KeepFailedDestinationFiles -or -not (Test-Path -LiteralPath $DestinationFilePath -PathType Leaf)) {
-        return
-    }
-
-    if ($DryRun) {
-        Write-Host "DRY RUN: Would remove failed destination file: $DestinationFilePath" -ForegroundColor Red
-        return
-    }
-
-    Remove-Item -LiteralPath $DestinationFilePath -Force
-    Write-Host "Removed failed destination file: $DestinationFilePath" -ForegroundColor Red
 }
 
 function Copy-ProfileFile {
@@ -202,33 +329,89 @@ function Copy-ProfileFile {
         return
     }
 
+    $stagedDestinationFilePath = New-StagedDestinationFilePath -DestinationFilePath $DestinationFilePath
+    $backupFilePath = $null
     $startTime = Get-Date
     try {
-        Start-BitsTransfer -Source $SourceFile.FullName -Destination $DestinationFilePath -DisplayName "FSLogix Profile File Transfer" -ErrorAction Stop
+        Start-BitsTransfer -Source $SourceFile.FullName -Destination $stagedDestinationFilePath -DisplayName "FSLogix Profile File Transfer" -ErrorAction Stop
+
+        if (-not (Test-VerifiedCopy -SourceFilePath $SourceFile.FullName -DestinationFilePath $stagedDestinationFilePath)) {
+            Write-Host "ERROR: Staged copy validation failed for $DestinationFilePath - source retained" -ForegroundColor Red
+            $script:Summary.ValidationFailures++
+            Remove-FailedCopyArtifact -FilePath $stagedDestinationFilePath -Description 'staged copy'
+            return
+        }
+
+        $backupFilePath = Move-StagedFileIntoPlace -StagedDestinationFilePath $stagedDestinationFilePath -DestinationFilePath $DestinationFilePath
         $endTime = Get-Date
 
-        if (Test-VerifiedCopy -SourceFilePath $SourceFile.FullName -DestinationFilePath $DestinationFilePath) {
-            $duration = ($endTime - $startTime).TotalSeconds
-            $fileSizeMiB = $SourceFile.Length / 1MB
-            $speed = if ($duration -gt 0) { $fileSizeMiB / $duration } else { 0 }
+        try {
+            Copy-FileMetadataFromSource -SourceFilePath $SourceFile.FullName -DestinationFilePath $DestinationFilePath
+        }
+        catch {
+            Write-Host "ERROR: Failed to copy metadata to destination file for $DestinationFilePath - source retained" -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            $script:Summary.MetadataFailures++
+            try {
+                Restore-BackupFileIfPresent -BackupFilePath $backupFilePath -DestinationFilePath $DestinationFilePath
+            }
+            catch {
+                Write-Host "ERROR: Failed to restore previous destination file: $($_.Exception.Message)" -ForegroundColor Red
+                $script:Summary.RestoreFailures++
+            }
 
-            Write-Host ("$ActionLabel validated: $DestinationFilePath at {0:N2} MiB/s" -f $speed) -ForegroundColor Green
-            $script:Summary.CopiedFiles++
-            Remove-SourceFileIfRequested -SourceFilePath $SourceFile.FullName
+            if ([string]::IsNullOrWhiteSpace($backupFilePath)) {
+                Remove-FailedCopyArtifact -FilePath $DestinationFilePath -Description 'new destination file'
+            }
+
+            return
         }
-        else {
-            Write-Host "ERROR: Copy validation failed for $DestinationFilePath - source retained" -ForegroundColor Red
+
+        if (-not (Test-VerifiedCopy -SourceFilePath $SourceFile.FullName -DestinationFilePath $DestinationFilePath)) {
+            Write-Host "ERROR: Final copy validation failed for $DestinationFilePath - source retained" -ForegroundColor Red
             $script:Summary.ValidationFailures++
-            Remove-DestinationFileIfFailed -DestinationFilePath $DestinationFilePath
+            try {
+                Restore-BackupFileIfPresent -BackupFilePath $backupFilePath -DestinationFilePath $DestinationFilePath
+            }
+            catch {
+                Write-Host "ERROR: Failed to restore previous destination file: $($_.Exception.Message)" -ForegroundColor Red
+                $script:Summary.RestoreFailures++
+            }
+
+            if ([string]::IsNullOrWhiteSpace($backupFilePath)) {
+                Remove-FailedCopyArtifact -FilePath $DestinationFilePath -Description 'new destination file'
+            }
+
+            return
         }
+
+        Remove-BackupFileIfPresent -BackupFilePath $backupFilePath
+
+        $duration = ($endTime - $startTime).TotalSeconds
+        $fileSizeMiB = $SourceFile.Length / 1MB
+        $speed = if ($duration -gt 0) { $fileSizeMiB / $duration } else { 0 }
+
+        Write-Host ("$ActionLabel validated: $DestinationFilePath at {0:N2} MiB/s" -f $speed) -ForegroundColor Green
+        $script:Summary.CopiedFiles++
+        Remove-SourceFileIfRequested -SourceFilePath $SourceFile.FullName
     }
     catch {
         Write-Host "ERROR: Failed to copy $($SourceFile.FullName) to $DestinationFilePath - source retained" -ForegroundColor Red
         Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
         $script:Summary.CopyFailures++
-        Remove-DestinationFileIfFailed -DestinationFilePath $DestinationFilePath
+        try {
+            Restore-BackupFileIfPresent -BackupFilePath $backupFilePath -DestinationFilePath $DestinationFilePath
+        }
+        catch {
+            Write-Host "ERROR: Failed to restore previous destination file: $($_.Exception.Message)" -ForegroundColor Red
+            $script:Summary.RestoreFailures++
+        }
+
+        Remove-FailedCopyArtifact -FilePath $stagedDestinationFilePath -Description 'staged copy'
     }
 }
+
+Assert-AvdMigrationRuntime -RequireBits:(-not $DryRun)
 
 $resolvedSource = Resolve-DirectoryPath -Path $SourcePath -MustExist
 $resolvedDestination = Resolve-DirectoryPath -Path $DestinationPath
@@ -274,6 +457,8 @@ $script:Summary = [ordered]@{
     ConflictFiles = 0
     CopyFailures = 0
     ValidationFailures = 0
+    MetadataFailures = 0
+    RestoreFailures = 0
 }
 
 $directories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory)
@@ -356,7 +541,7 @@ foreach ($key in $script:Summary.Keys) {
 }
 Write-Host '=======================================' -ForegroundColor Cyan
 
-if ($script:Summary.CopyFailures -gt 0 -or $script:Summary.ValidationFailures -gt 0 -or $script:Summary.ConflictFiles -gt 0) {
+if ($script:Summary.CopyFailures -gt 0 -or $script:Summary.ValidationFailures -gt 0 -or $script:Summary.MetadataFailures -gt 0 -or $script:Summary.RestoreFailures -gt 0 -or $script:Summary.ConflictFiles -gt 0) {
     exit 1
 }
 

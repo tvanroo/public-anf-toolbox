@@ -16,12 +16,16 @@ By using any content from this repository, you acknowledge that you do so at you
     - Migrates FSLogix AVD (Azure Virtual Desktop) profiles from existing SMB shares to Azure NetApp Files SMB shares with intelligent conflict resolution and profile-in-use detection. Result: Safe migration of user profiles with minimal downtime and data integrity protection.
 
 ## Script Purpose
-This script is specifically designed as a **final cutover tool** for migrating FSLogix profiles from legacy SMB file shares to Azure NetApp Files (ANF) SMB shares in Azure Virtual Desktop (AVD) environments. It performs intelligent file synchronization with conflict resolution and automatically detects profiles that are currently in use to prevent data corruption.
+This script is designed to run from a Windows VM or Windows host that has SMB access to both the source and destination shares. It migrates FSLogix profiles from legacy SMB file shares to Azure NetApp Files (ANF) SMB shares in Azure Virtual Desktop (AVD) environments. It performs intelligent file synchronization with conflict resolution and automatically detects profiles that are currently in use to prevent data corruption.
+
+This is not deployed to Azure Automation because the copy process must run from a machine that can reach both file shares over SMB.
 
 ## Key Features
 - **Intelligent File Comparison**: Compares creation and modification dates to resolve conflicts intelligently
 - **Profile-in-Use Detection**: Automatically skips profiles that contain `.metadata` files (indicating active use)
 - **BITS Transfer Technology**: Uses Background Intelligent Transfer Service for efficient file transfers
+- **Staged Destination Updates**: Copies to a staged temporary file first, validates it, then replaces the destination only after validation succeeds
+- **Metadata Preservation**: Copies timestamps, attributes, and NTFS ACLs from the source file to the destination file
 - **Conflict Resolution Logic**: 
   - Overwrites destination files only if source files are more recently modified
   - Preserves newer profiles and prevents overwriting with older versions
@@ -38,12 +42,14 @@ The script follows this intelligent decision tree for each file:
    - If destination file doesn't exist → Copy source to destination
    - If destination file exists → Apply conflict resolution logic
 3. **Conflict Resolution** (when destination exists):
-   - If creation times match AND source is newer → Overwrite destination
+   - If creation times match AND source is newer → Copy to a staged temporary file, validate, then replace destination
    - If creation times match AND destination is newer/same → Skip overwrite
    - If creation times differ → Skip for manual resolution (prevents empty profile overwrites)
 4. **Source Cleanup**:
    - Source files remain in place by default
    - With `-DeleteSourceAfterVerifiedCopy`, source files are deleted only after destination size and SHA256 hash validation
+
+If an update fails, the existing destination file is preserved or restored from the temporary backup file. Failed new-file copies remove only the staged artifact by default, so reruns can copy them cleanly. Use `-KeepFailedDestinationFiles` only when you need to inspect a failed staged file.
 
 ## Configuration Variables
 ```powershell
@@ -58,6 +64,7 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 
 ## Prerequisites
 - **Dual Path Configuration**: Both old and new SMB paths should be configured in FSLogix settings
+- **Windows Runtime**: Run from a Windows VM or Windows host. Live copy mode requires `Start-BitsTransfer` and the Background Intelligent Transfer Service.
 - **Administrative Access**: Script must run with permissions to both source and destination shares
 - **BITS Service**: Background Intelligent Transfer Service must be available
 - **Network Connectivity**: Reliable network connection between source and ANF destination
@@ -82,6 +89,8 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 - **Dry Run Mode**: `-DryRun` lists copy, overwrite, and optional cleanup actions without changing files
 - **Non-Destructive Default**: Source files are preserved unless `-DeleteSourceAfterVerifiedCopy` is provided
 - **Verified Source Cleanup**: Optional source deletion requires matching destination size and SHA256 hash
+- **Staged Copy Safety**: Existing destination files are not overwritten until the staged temporary file is copied and validated; source metadata is applied to the final destination before source cleanup is allowed
+- **Destination Restore**: If replacement validation fails, the previous destination file is restored when one existed
 - **Profile Lock Detection**: Automatically skips profiles with active `.metadata` files
 - **Conflict Logging**: Clear console output showing all actions taken
 - **Preservation Logic**: Prevents overwriting newer profiles with older versions
