@@ -12,8 +12,8 @@ By using any content from this repository, you acknowledge that you do so at you
 
 ## Download Script
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-volume-equity-modernization%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy.json)
-[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-volume-equity-modernization%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy-gov.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy-gov.json)
 
 [ANF QoS Volume Equity](./ANF-QoS-Autoscale-VolumeEquity.ps1)
     - Assigns Manual QoS volume throughput equally across all volumes in each configured capacity pool.

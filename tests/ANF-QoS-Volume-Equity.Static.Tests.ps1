@@ -15,8 +15,7 @@ $readmeText = Get-Content -LiteralPath $readmePath -Raw
 $deployText = if (Test-Path -LiteralPath $deployPath) { Get-Content -LiteralPath $deployPath -Raw } else { "" }
 $deployGovText = if (Test-Path -LiteralPath $deployGovPath) { Get-Content -LiteralPath $deployGovPath -Raw } else { "" }
 $deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Content -LiteralPath $deployGovBadgePath -Raw } else { "" }
-$wipBranchPath = 'codex/qos-volume-equity-modernization'
-$wipBranchPathForDeployUri = 'codex%2Fqos-volume-equity-modernization'
+$publishedBranchPath = 'main'
 
 function Assert-Contains {
     param(
@@ -98,9 +97,9 @@ Assert-Contains -Haystack $deployText -Needle '"ANF_CapacityPoolResourceId"' -Me
 Assert-Contains -Haystack $deployText -Needle '"ANF_MinimumThroughputPerVolume"' -Message 'Expected commercial deploy template to create minimum throughput Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_ConvertToManualMode"' -Message 'Expected commercial deploy template to create conversion Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_TestMode"' -Message 'Expected commercial deploy template to create test mode Automation variable.'
-Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$wipBranchPathForDeployUri%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the current WIP branch template for testing.'
-Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1" -Message 'Expected deploy template to import the runbook from the current WIP branch for testing.'
-Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Volume%20Equity/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the current WIP branch shared template for testing.'
+Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$publishedBranchPath%2FANF%2520QoS%2520Volume%2520Equity%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the published main branch template.'
+Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$publishedBranchPath/ANF%20QoS%20Volume%20Equity/ANF-QoS-Autoscale-VolumeEquity.ps1" -Message 'Expected deploy template to import the runbook from the published main branch.'
+Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$publishedBranchPath/ANF%20QoS%20Volume%20Equity/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the published main branch shared template.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 'Expected Azure Gov badge to use the standard Azure button color.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.NetAppFiles"' -Message 'Expected deploy template not to import Az.NetAppFiles.'
