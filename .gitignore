@@ -4,3 +4,6 @@ sync.ffs_db
 
 # Ignore Oracle JDK folder
 Oracle_JDK-24/
+
+# Local Codex working notes that should not be published.
+.codex-local/
