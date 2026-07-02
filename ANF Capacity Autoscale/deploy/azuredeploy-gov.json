@@ -84,14 +84,14 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
     }
   },
   "variables": {
-    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json",
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json",
     "editableTestModeVariable": "ANF_TestMode",
     "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId",
     "editableLargeVolumeMaximumSizeVariable": "ANF_LargeVolumeMaximumSizeGiB"
@@ -160,7 +160,7 @@
     },
     "template": {
       "type": "string",
-      "value": "Azure Government wrapper for ANF Capacity Autoscale WIP deploy template."
+      "value": "Azure Government wrapper for ANF Capacity Autoscale deploy template."
     }
   }
 }

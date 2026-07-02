@@ -91,7 +91,7 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
@@ -116,9 +116,9 @@
       "managed-by": "public-anf-toolbox",
       "solution": "anf-capacity-autoscale",
       "repository": "https://github.com/tvanroo/public-anf-toolbox",
-      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/codex/wip-anf-capacity-autoscale-fsl/ANF%20Capacity%20Autoscale",
+      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Capacity%20Autoscale",
       "script": "ANF-Capacity-Autoscale.ps1",
-      "status": "WIP"
+      "status": "current"
     }
   },
   "resources": [
@@ -369,7 +369,7 @@
       ],
       "tags": "[variables('standardTags')]",
       "properties": {
-        "description": "ANF Capacity Autoscale runbook. WIP script for all service levels and large-volume variants.",
+        "description": "ANF Capacity Autoscale runbook for all service levels and large-volume variants.",
         "runbookType": "PowerShell72",
         "logProgress": true,
         "logVerbose": true,

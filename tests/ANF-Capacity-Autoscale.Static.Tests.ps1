@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Capacity-Autoscale.ps1'
+$legacySimpleScriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Simple-Capacity-Autoscale.ps1'
 $readmePath = Join-Path $repoRoot 'ANF Capacity Autoscale/README.md'
 $deployPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy.json'
 $deployGovPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy-gov.json'
@@ -13,6 +14,10 @@ $readmeText = Get-Content -LiteralPath $readmePath -Raw
 $deployText = if (Test-Path -LiteralPath $deployPath) { Get-Content -LiteralPath $deployPath -Raw } else { "" }
 $deployGovText = if (Test-Path -LiteralPath $deployGovPath) { Get-Content -LiteralPath $deployGovPath -Raw } else { "" }
 $deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Content -LiteralPath $deployGovBadgePath -Raw } else { "" }
+
+if (Test-Path -LiteralPath $legacySimpleScriptPath) {
+    throw 'Expected the old ANF-Simple-Capacity-Autoscale.ps1 script to be removed after main promotion.'
+}
 
 function Assert-Contains {
     param(
@@ -111,6 +116,13 @@ Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityResizeThreshold` |
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure' -Message 'Expected README to expose Deploy to Azure button.'
 Assert-Contains -Haystack $readmeText -Needle 'Deploy to Azure Gov' -Message 'Expected README to expose Deploy to Azure Gov button.'
 Assert-Contains -Haystack $readmeText -Needle 'deploy/deploytoazuregov.svg' -Message 'Expected Azure Gov deploy badge to use the local Azure-style Gov badge.'
+Assert-Contains -Haystack $readmeText -Needle 'public-anf-toolbox%2Fmain%2FANF%2520Capacity%2520Autoscale%2Fdeploy%2Fazuredeploy.json' -Message 'Expected commercial deploy button to point at the main branch template.'
+Assert-Contains -Haystack $deployText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/ANF-Capacity-Autoscale.ps1' -Message 'Expected commercial deploy template to import the runbook from main.'
+Assert-Contains -Haystack $deployGovText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Capacity%20Autoscale/deploy/azuredeploy.json' -Message 'Expected Azure Gov wrapper to link the main branch shared template.'
+Assert-NotContains -Haystack $readmeText -Needle 'codex%2Fwip-anf-capacity-autoscale-fsl' -Message 'Expected README deploy buttons not to point at the WIP branch after main promotion.'
+Assert-NotContains -Haystack $deployText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected commercial deploy template not to point at the WIP branch after main promotion.'
+Assert-NotContains -Haystack $deployGovText -Needle 'codex/wip-anf-capacity-autoscale-fsl' -Message 'Expected Azure Gov deploy template not to point at the WIP branch after main promotion.'
+Assert-NotContains -Haystack $deployText -Needle '"status": "WIP"' -Message 'Expected commercial deploy template not to tag deployments as WIP after main promotion.'
 Assert-NotContains -Haystack $readmeText -Needle 'img.shields.io/badge/Deploy%20to-Azure%20Gov' -Message 'Expected README not to use the generic shields.io Azure Gov badge.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG to label the button as Deploy to Azure Gov.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 'Expected local Azure Gov badge SVG to use the standard Azure button color.'
