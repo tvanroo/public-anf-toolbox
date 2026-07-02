@@ -24,6 +24,12 @@ The standard ARM deployment experience still provides subscription and resource 
 
 The deployer must be allowed to deploy into the target ANF account resource group and create role assignments at the target ANF account scope, for example through Owner or User Access Administrator permissions plus deployment rights on that resource group. Without `Microsoft.Authorization/roleAssignments/write` on that target scope, the Automation Account can still be created but automatic RBAC assignment will fail.
 
+## Capacity autoscale behavior
+
+The runbook compares observed consumed capacity against the configured free-space buffer and adjusts provisioned capacity only when a scheduled run sees that a threshold condition has been met. When consumed capacity reaches the minimum free-space threshold, the volume and pool are expanded. When consumption has fallen far enough that capacity can be removed while preserving the configured buffer, the volume and pool can contract.
+
+![ANF Capacity Autoscale behavior over a month](media/capacity-autoscale-threshold-behavior.png)
+
 ## Post-deployment variable changes
 
 After deployment, open the Automation Account in Azure Portal and go to **Shared Resources** > **Variables**. These `ANF_*` variables are the post-install configuration surface for the runbook.
@@ -49,6 +55,10 @@ Other editable variables:
 | `ANF_VolumeMinThroughputMap` | JSON map of volume name to minimum MiB/s. On classic Manual QoS pools it influences proportional allocation. On Flexible Service Level pools it can cause a pool throughput increase when the managed and excluded volume requirements exceed current pool throughput. |
 | `ANF_LargeVolumeMaximumSizeGiB` | Maximum-size guard for existing large volumes. It defaults to 1048576 GiB (1 PiB) and can be raised after deployment in regions that support larger limits. |
 | `ANF_TenantId` | Tenant used for authentication. The deploy template sets this from the deployment context; change it only if the runbook must authenticate against a different tenant. |
+
+To manage more than one capacity pool from the same Automation Account, edit `ANF_CapacityPoolResourceId` after deployment and paste each full capacity pool Resource ID into the value. Separate multiple IDs with new lines, semicolons, or commas. Commas are often the easiest option when editing the value directly in Azure Portal.
+
+![Multiple capacity pool Resource IDs in the ANF_CapacityPoolResourceId variable](media/multiple-pool-variable-syntax.png)
 
 Each capacity pool is processed independently. For every configured pool, the runbook re-reads the subscription, resource group, ANF account, pool, service level, QoS type, throughput, volume list, and volume metrics before calculating changes. There is no capacity, throughput, service-level, or volume math shared across pools. The policy variables above are shared across all pools in the same Automation Account; deploy a second Automation Account when different pools need different resize or throughput policy.
 

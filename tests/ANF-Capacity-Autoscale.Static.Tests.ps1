@@ -7,6 +7,8 @@ $scriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Capacity-Autoscale
 $legacySimpleScriptPath = Join-Path $repoRoot 'ANF Capacity Autoscale/ANF-Simple-Capacity-Autoscale.ps1'
 $readmePath = Join-Path $repoRoot 'ANF Capacity Autoscale/README.md'
 $automationVariablesImagePath = Join-Path $repoRoot 'ANF Capacity Autoscale/media/automation-variables.png'
+$capacityAutoscaleBehaviorImagePath = Join-Path $repoRoot 'ANF Capacity Autoscale/media/capacity-autoscale-threshold-behavior.png'
+$multiplePoolVariableSyntaxImagePath = Join-Path $repoRoot 'ANF Capacity Autoscale/media/multiple-pool-variable-syntax.png'
 $deployPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy.json'
 $deployGovPath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/azuredeploy-gov.json'
 $deployGovBadgePath = Join-Path $repoRoot 'ANF Capacity Autoscale/deploy/deploytoazuregov.svg'
@@ -22,6 +24,14 @@ if (Test-Path -LiteralPath $legacySimpleScriptPath) {
 
 if (-not (Test-Path -LiteralPath $automationVariablesImagePath)) {
     throw 'Expected README Automation variables screenshot to exist at ANF Capacity Autoscale/media/automation-variables.png.'
+}
+
+if (-not (Test-Path -LiteralPath $capacityAutoscaleBehaviorImagePath)) {
+    throw 'Expected README Capacity Autoscale behavior chart to exist at ANF Capacity Autoscale/media/capacity-autoscale-threshold-behavior.png.'
+}
+
+if (-not (Test-Path -LiteralPath $multiplePoolVariableSyntaxImagePath)) {
+    throw 'Expected README multiple-pool variable syntax screenshot to exist at ANF Capacity Autoscale/media/multiple-pool-variable-syntax.png.'
 }
 
 function Assert-Contains {
@@ -145,6 +155,8 @@ Assert-Contains -Haystack $readmeText -Needle 'Standard `16`, Premium `64`, and 
 Assert-Contains -Haystack $readmeText -Needle 'PowerShell 7.2' -Message 'Expected README to document that the deploy template uses the PowerShell 7.2 Azure Automation runtime.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityPoolResourceId` | required |' -Message 'Expected README settings table to document single target capacity pool Resource ID.'
 Assert-Contains -Haystack $readmeText -Needle 'media/automation-variables.png' -Message 'Expected README to include the Azure Automation variables screenshot.'
+Assert-Contains -Haystack $readmeText -Needle 'media/capacity-autoscale-threshold-behavior.png' -Message 'Expected README to include the Capacity Autoscale behavior chart.'
+Assert-Contains -Haystack $readmeText -Needle 'media/multiple-pool-variable-syntax.png' -Message 'Expected README to include the multiple-pool variable syntax screenshot.'
 Assert-Contains -Haystack $readmeText -Needle '`ANF_TestMode` must be changed to `No` before the runbook applies any changes.' -Message 'Expected README to explicitly call out the live-mode TestMode switch.'
 Assert-Contains -Haystack $readmeText -Needle 'The deployment interface still asks for one capacity pool Resource ID.' -Message 'Expected README to document that multi-pool support is a post-install variable edit.'
 Assert-Contains -Haystack $readmeText -Needle 'separate multiple IDs with new lines, semicolons, or commas' -Message 'Expected README to document supported multi-pool delimiters.'

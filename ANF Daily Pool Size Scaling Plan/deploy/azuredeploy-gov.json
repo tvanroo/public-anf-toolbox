@@ -1,0 +1,163 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "automationAccountName": {
+      "type": "string",
+      "defaultValue": "[concat('ANF-Daily-Pool-Scaling-', take(uniqueString(resourceGroup().id, deployment().name), 6))]",
+      "metadata": {
+        "description": "Automation Account name. Change this if the name already exists in the deployment resource group, or clear it to generate a unique name."
+      }
+    },
+    "capacityPoolResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full Resource ID of the initial Azure NetApp Files capacity pool. After deployment, edit the ANF_CapacityPoolResourceId Automation variable to add more pool IDs if needed."
+      }
+    },
+    "testMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes = preview only. No = apply live pool size and volume throughput changes."
+      }
+    },
+    "onHoursTiBs": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 1,
+      "metadata": {
+        "description": "Target capacity pool size in TiB during on-hours."
+      }
+    },
+    "offHoursTiBs": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Target capacity pool size in TiB during off-hours and weekends."
+      }
+    },
+    "dayStartTime": {
+      "type": "string",
+      "defaultValue": "08:30",
+      "metadata": {
+        "description": "On-hours start time in HH:mm format."
+      }
+    },
+    "dayEndTime": {
+      "type": "string",
+      "defaultValue": "18:30",
+      "metadata": {
+        "description": "On-hours end time in HH:mm format."
+      }
+    },
+    "timeZone": {
+      "type": "string",
+      "defaultValue": "Central Standard Time",
+      "metadata": {
+        "description": "Time zone ID used by the runbook to evaluate the daily schedule."
+      }
+    },
+    "weekDays": {
+      "type": "string",
+      "defaultValue": "Monday,Tuesday,Wednesday,Thursday,Friday",
+      "metadata": {
+        "description": "Comma-separated days that can use the on-hours target."
+      }
+    },
+    "weekendDays": {
+      "type": "string",
+      "defaultValue": "Saturday,Sunday",
+      "metadata": {
+        "description": "Comma-separated days always treated as off-hours."
+      }
+    },
+    "scheduleStartDelayMinutes": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minutes from deployment time until the first scheduled run starts."
+      }
+    },
+    "runbookScriptUri": {
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Daily%20Pool%20Size%20Scaling%20Plan/ANF-daily-pool-size-scaling-plan.ps1",
+      "metadata": {
+        "description": "Source URL of the runbook script file to import and publish."
+      }
+    }
+  },
+  "variables": {
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Daily%20Pool%20Size%20Scaling%20Plan/deploy/azuredeploy.json",
+    "editableTestModeVariable": "ANF_TestMode",
+    "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "anf-daily-pool-size-scaling-gov",
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[variables('sharedTemplateUri')]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "automationAccountName": {
+            "value": "[parameters('automationAccountName')]"
+          },
+          "capacityPoolResourceId": {
+            "value": "[parameters('capacityPoolResourceId')]"
+          },
+          "testMode": {
+            "value": "[parameters('testMode')]"
+          },
+          "onHoursTiBs": {
+            "value": "[parameters('onHoursTiBs')]"
+          },
+          "offHoursTiBs": {
+            "value": "[parameters('offHoursTiBs')]"
+          },
+          "dayStartTime": {
+            "value": "[parameters('dayStartTime')]"
+          },
+          "dayEndTime": {
+            "value": "[parameters('dayEndTime')]"
+          },
+          "timeZone": {
+            "value": "[parameters('timeZone')]"
+          },
+          "weekDays": {
+            "value": "[parameters('weekDays')]"
+          },
+          "weekendDays": {
+            "value": "[parameters('weekendDays')]"
+          },
+          "scheduleStartDelayMinutes": {
+            "value": "[parameters('scheduleStartDelayMinutes')]"
+          },
+          "runbookScriptUri": {
+            "value": "[parameters('runbookScriptUri')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "testModeVariable": {
+      "type": "string",
+      "value": "[variables('editableTestModeVariable')]"
+    },
+    "capacityPoolResourceIdVariable": {
+      "type": "string",
+      "value": "[variables('editableCapacityPoolResourceIdVariable')]"
+    }
+  }
+}
