@@ -14,6 +14,8 @@ By using any content from this repository, you acknowledge that you do so at you
 
 Robocopy Booster accelerates large file-copy migrations that contain many small files by running multiple Robocopy jobs in parallel. Each top-level source directory becomes a separate Robocopy job, and root-level source files are copied as one additional job.
 
+![Robocopy Booster behavior](media/robocopy-booster.png)
+
 ## Download Scripts
 
 ### [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/blob/main/Robocopy%20Booster/robocopy-booster.ps1)
