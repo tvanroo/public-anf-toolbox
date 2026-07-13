@@ -132,6 +132,8 @@ pwsh -NoProfile -File $scriptPath
 
 The delete path removes volumes first, waits until the pool's volume list is empty, removes the capacity pool, waits until the account no longer lists that pool, and only then removes the ANF account. If any capacity pool still remains in the account, the script stops instead of attempting the account delete.
 
+If Azure reports `CannotDeleteResource` because a nested volume still exists during capacity pool deletion, the script refreshes the pool volume list, deletes any remaining nested volumes reported by Azure, waits again, and retries the capacity pool deletion.
+
 Resource group deletion is enabled by default but still guarded. When `ANF_DeleteResourceGroupIfEmpty=Yes`, the script lists resources in the resource group after ANF account deletion. If any resource remains, it writes a warning with the remaining resource names and leaves the resource group in place. Set `ANF_DeleteResourceGroupIfEmpty=No` to skip the resource group delete check entirely.
 
 ## Notes

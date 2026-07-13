@@ -304,6 +304,20 @@ function Get-AnfResourceCollectionValues {
     return @()
 }
 
+function Get-AnfRestErrorText {
+    param([Parameter(Mandatory=$true)]$ErrorRecord)
+
+    $parts = @()
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        $parts += [string]$ErrorRecord.ErrorDetails.Message
+    }
+    if ($ErrorRecord.Exception -and $ErrorRecord.Exception.Message) {
+        $parts += [string]$ErrorRecord.Exception.Message
+    }
+
+    return ($parts -join " ")
+}
+
 function Get-AnfResourceShortName {
     param([Parameter(Mandatory=$true)][object]$Resource)
 
@@ -321,6 +335,39 @@ function Get-AnfResourceShortName {
     }
 
     return ""
+}
+
+function Get-AnfResourceShortNameFromId {
+    param([Parameter(Mandatory=$true)][string]$ResourceId)
+
+    if ($ResourceId -match '/([^/]+)$') {
+        return $Matches[1]
+    }
+
+    return $ResourceId
+}
+
+function Get-AnfNestedVolumeResourceIdsFromError {
+    param(
+        [Parameter(Mandatory=$true)][string]$ErrorText,
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName
+    )
+
+    $resourceIds = @()
+    $normalizedErrorText = $ErrorText -replace '\\u0027', "'" -replace '\\u0022', '"'
+    $fullIdMatches = [regex]::Matches($normalizedErrorText, '/subscriptions/[^''",\\\s]+/resourceGroups/[^''",\\\s]+/providers/Microsoft\.NetApp/netAppAccounts/[^''",\\\s]+/capacityPools/[^''",\\\s]+/volumes/[^''",\\\s\.]+')
+    foreach ($match in $fullIdMatches) {
+        $resourceIds += $match.Value.Trim("'`"")
+    }
+
+    $relativeIdMatches = [regex]::Matches($normalizedErrorText, 'Microsoft\.NetApp/netAppAccounts/[^''",\\\s]+/capacityPools/[^''",\\\s]+/volumes/[^''",\\\s\.]+')
+    foreach ($match in $relativeIdMatches) {
+        $relativeId = $match.Value.Trim("'`"")
+        $resourceIds += "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/$relativeId"
+    }
+
+    return @($resourceIds | Select-Object -Unique)
 }
 
 function Get-AnfResourceDisplayName {
@@ -473,6 +520,116 @@ function Wait-AnfNamedChildAbsent {
 
         Write-Output "Waiting for $ResourceTypeLabel '$ChildName' to disappear from parent collection."
         Start-Sleep -Seconds $waitSleepSeconds
+    } while ($true)
+}
+
+function Remove-AnfVolumeResource {
+    param(
+        [Parameter(Mandatory=$true)][string]$VolumeResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion
+    )
+
+    $volumeName = Get-AnfResourceShortNameFromId -ResourceId $VolumeResourceId
+    if (-not (Get-AnfResourceOrNull -ResourceId $VolumeResourceId -ApiVersion $ApiVersion)) {
+        Write-Output "Volume '$volumeName' was already removed."
+        return
+    }
+
+    Write-Output "Deleting volume '$volumeName'..."
+    try {
+        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $VolumeResourceId -ApiVersion $ApiVersion
+    } catch {
+        if (-not (Get-AnfResourceOrNull -ResourceId $VolumeResourceId -ApiVersion $ApiVersion)) {
+            Write-Output "Volume '$volumeName' was already removed."
+            return
+        }
+
+        throw
+    }
+
+    Wait-AnfProvisioningState -ResourceId $VolumeResourceId -ApiVersion $ApiVersion -WaitForDelete
+}
+
+function Remove-AnfVolumesInPool {
+    param(
+        [Parameter(Mandatory=$true)][string]$PoolVolumesResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter(Mandatory=$true)][string]$PoolName
+    )
+
+    $deadline = (Get-Date).AddSeconds($waitMaxSeconds)
+    do {
+        $remainingVolumes = @(Get-AnfResourceCollectionValues -CollectionResourceId $PoolVolumesResourceId -ApiVersion $ApiVersion)
+        if ($remainingVolumes.Count -eq 0) {
+            Write-Output "Confirmed no remaining volume(s) in pool '$PoolName'."
+            return
+        }
+
+        foreach ($volume in $remainingVolumes) {
+            Remove-AnfVolumeResource -VolumeResourceId $volume.id -ApiVersion $ApiVersion
+        }
+
+        $remainingVolumes = @(Get-AnfResourceCollectionValues -CollectionResourceId $PoolVolumesResourceId -ApiVersion $ApiVersion)
+        if ($remainingVolumes.Count -eq 0) {
+            Write-Output "Confirmed no remaining volume(s) in pool '$PoolName'."
+            return
+        }
+
+        if ((Get-Date) -gt $deadline) {
+            $remainingVolumeNames = @($remainingVolumes | ForEach-Object { Get-AnfResourceShortName -Resource $_ }) -join ', '
+            throw "Timed out waiting for volume(s) in pool '$PoolName' to be removed. Remaining: $remainingVolumeNames"
+        }
+
+        $remainingNamesForLog = @($remainingVolumes | ForEach-Object { Get-AnfResourceShortName -Resource $_ }) -join ', '
+        Write-Output "Waiting for volume(s) in pool '$PoolName' to be removed. Remaining: $remainingNamesForLog"
+        Start-Sleep -Seconds $waitSleepSeconds
+    } while ($true)
+}
+
+function Remove-AnfCapacityPoolWithNestedVolumeRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$PoolResourceId,
+        [Parameter(Mandatory=$true)][string]$PoolVolumesResourceId,
+        [Parameter(Mandatory=$true)][string]$AccountPoolsResourceId,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$ApiVersion
+    )
+
+    $deadline = (Get-Date).AddSeconds($waitMaxSeconds)
+    do {
+        Remove-AnfVolumesInPool -PoolVolumesResourceId $PoolVolumesResourceId -ApiVersion $ApiVersion -PoolName $PoolName
+
+        if (-not (Get-AnfResourceOrNull -ResourceId $PoolResourceId -ApiVersion $ApiVersion)) {
+            Write-Output "Capacity pool '$PoolName' was not found."
+            Wait-AnfNamedChildAbsent -CollectionResourceId $AccountPoolsResourceId -ApiVersion $ApiVersion -ChildName $PoolName -ResourceTypeLabel "capacity pool"
+            return
+        }
+
+        Write-Output "Deleting capacity pool '$PoolName'..."
+        try {
+            $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $PoolResourceId -ApiVersion $ApiVersion
+            Wait-AnfProvisioningState -ResourceId $PoolResourceId -ApiVersion $ApiVersion -WaitForDelete
+            Wait-AnfNamedChildAbsent -CollectionResourceId $AccountPoolsResourceId -ApiVersion $ApiVersion -ChildName $PoolName -ResourceTypeLabel "capacity pool"
+            return
+        } catch {
+            $errorText = Get-AnfRestErrorText -ErrorRecord $_
+            $nestedVolumeResourceIds = @(Get-AnfNestedVolumeResourceIdsFromError -ErrorText $errorText -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName)
+            if ($nestedVolumeResourceIds.Count -eq 0 -and $errorText -notmatch 'CannotDeleteResource|nested resources') {
+                throw
+            }
+
+            if ((Get-Date) -gt $deadline) {
+                throw "Timed out deleting capacity pool '$PoolName' because Azure still reports nested resources. Last error: $errorText"
+            }
+
+            Write-Warning "Capacity pool delete was blocked because Azure still reports nested volume resources. Refreshing volume list and retrying."
+            foreach ($nestedVolumeResourceId in $nestedVolumeResourceIds) {
+                Remove-AnfVolumeResource -VolumeResourceId $nestedVolumeResourceId -ApiVersion $ApiVersion
+            }
+            Start-Sleep -Seconds $waitSleepSeconds
+        }
     } while ($true)
 }
 
@@ -676,22 +833,10 @@ if ($operation -eq "Delete") {
         throw "Live delete requires ANF_DeleteConfirmation to exactly equal '$expectedConfirmation'. Current value: '$deleteConfirmation'"
     }
 
-    foreach ($volume in $volumes) {
-        Write-Output "Deleting volume '$($volume.name)'..."
-        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $volume.id -ApiVersion $anfApiVersion
-        Wait-AnfProvisioningState -ResourceId $volume.id -ApiVersion $anfApiVersion -WaitForDelete
-    }
+    Remove-AnfVolumesInPool -PoolVolumesResourceId $poolVolumesResourceId -ApiVersion $anfApiVersion -PoolName $anfPoolName
     Wait-AnfChildResourceCollectionEmpty -CollectionResourceId $poolVolumesResourceId -ApiVersion $anfApiVersion -ResourceTypeLabel "volume(s) in pool '$anfPoolName'"
 
-    if (Get-AnfResourceOrNull -ResourceId $poolResourceId -ApiVersion $anfApiVersion) {
-        Write-Output "Deleting capacity pool '$anfPoolName'..."
-        $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $poolResourceId -ApiVersion $anfApiVersion
-        Wait-AnfProvisioningState -ResourceId $poolResourceId -ApiVersion $anfApiVersion -WaitForDelete
-        Wait-AnfNamedChildAbsent -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion -ChildName $anfPoolName -ResourceTypeLabel "capacity pool"
-    } else {
-        Write-Output "Capacity pool '$anfPoolName' was not found."
-        Wait-AnfNamedChildAbsent -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion -ChildName $anfPoolName -ResourceTypeLabel "capacity pool"
-    }
+    Remove-AnfCapacityPoolWithNestedVolumeRetry -PoolResourceId $poolResourceId -PoolVolumesResourceId $poolVolumesResourceId -AccountPoolsResourceId $accountPoolsResourceId -PoolName $anfPoolName -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -ApiVersion $anfApiVersion
 
     $remainingPools = @(Get-AnfResourceCollectionValues -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion)
     if ($remainingPools.Count -gt 0) {
