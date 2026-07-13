@@ -10,6 +10,7 @@ This lab helper creates or deletes an Azure NetApp Files account, one capacity p
 - Live delete requires `ANF_TestMode=No` and an exact `ANF_DeleteConfirmation` value.
 - The script is non-interactive. All decisions are supplied as variables so the planned action is visible before the run starts.
 - The resource group must already exist; this script does not create or delete the resource group.
+- Delete mode removes volumes, then the capacity pool, then the ANF account, and waits for Azure to confirm each layer is gone before moving to the next layer.
 
 ## Inputs
 
@@ -125,7 +126,7 @@ $env:ANF_DeleteConfirmation = "DELETE <account>/<pool>"
 pwsh -NoProfile -File $scriptPath
 ```
 
-The delete path removes volumes first, then the capacity pool, then the ANF account.
+The delete path removes volumes first, waits until the pool's volume list is empty, removes the capacity pool, waits until the account no longer lists that pool, and only then removes the ANF account. If any capacity pool still remains in the account, the script stops instead of attempting the account delete.
 
 ## Notes
 

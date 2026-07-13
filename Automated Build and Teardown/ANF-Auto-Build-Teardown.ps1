@@ -284,6 +284,39 @@ function Get-AnfResourceOrNull {
     }
 }
 
+function Get-AnfResourceCollectionValues {
+    param(
+        [Parameter(Mandatory=$true)][string]$CollectionResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion
+    )
+
+    $response = Get-AnfResourceOrNull -ResourceId $CollectionResourceId -ApiVersion $ApiVersion
+    if ($response -and $response.value) {
+        return @($response.value)
+    }
+
+    return @()
+}
+
+function Get-AnfResourceShortName {
+    param([Parameter(Mandatory=$true)][object]$Resource)
+
+    if ($Resource.name) {
+        $name = [string]$Resource.name
+        if ($name.Contains('/')) {
+            return $name.Split('/')[-1]
+        }
+
+        return $name
+    }
+
+    if ($Resource.id -and "$($Resource.id)" -match '/([^/]+)$') {
+        return $Matches[1]
+    }
+
+    return ""
+}
+
 function New-AnfResourceId {
     param(
         [Parameter(Mandatory=$true)][string]$SubscriptionId,
@@ -334,6 +367,68 @@ function Wait-AnfProvisioningState {
             throw "Timed out waiting for provisioning state '$DesiredState' on $ResourceId. Current state: $state"
         }
 
+        Start-Sleep -Seconds $waitSleepSeconds
+    } while ($true)
+}
+
+function Wait-AnfChildResourceCollectionEmpty {
+    param(
+        [Parameter(Mandatory=$true)][string]$CollectionResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter(Mandatory=$true)][string]$ResourceTypeLabel
+    )
+
+    $deadline = (Get-Date).AddSeconds($waitMaxSeconds)
+    do {
+        $remainingResources = @(Get-AnfResourceCollectionValues -CollectionResourceId $CollectionResourceId -ApiVersion $ApiVersion)
+        if ($remainingResources.Count -eq 0) {
+            Write-Output "Confirmed no remaining $ResourceTypeLabel."
+            return
+        }
+
+        if ((Get-Date) -gt $deadline) {
+            $remainingNames = @($remainingResources | ForEach-Object { Get-AnfResourceShortName -Resource $_ }) -join ', '
+            throw "Timed out waiting for $ResourceTypeLabel to be removed. Remaining: $remainingNames"
+        }
+
+        $remainingNamesForLog = @($remainingResources | ForEach-Object { Get-AnfResourceShortName -Resource $_ }) -join ', '
+        Write-Output "Waiting for $ResourceTypeLabel to be removed. Remaining: $remainingNamesForLog"
+        Start-Sleep -Seconds $waitSleepSeconds
+    } while ($true)
+}
+
+function Wait-AnfNamedChildAbsent {
+    param(
+        [Parameter(Mandatory=$true)][string]$CollectionResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter(Mandatory=$true)][string]$ChildName,
+        [Parameter(Mandatory=$true)][string]$ResourceTypeLabel
+    )
+
+    $deadline = (Get-Date).AddSeconds($waitMaxSeconds)
+    do {
+        $remainingResources = @(Get-AnfResourceCollectionValues -CollectionResourceId $CollectionResourceId -ApiVersion $ApiVersion)
+        $matchingResources = @($remainingResources | Where-Object {
+            (Get-AnfResourceShortName -Resource $_).Equals($ChildName, [System.StringComparison]::OrdinalIgnoreCase)
+        })
+
+        if ($matchingResources.Count -eq 0) {
+            Write-Output "Confirmed $ResourceTypeLabel '$ChildName' is no longer listed by the parent resource."
+            return
+        }
+
+        if ((Get-Date) -gt $deadline) {
+            $states = @($matchingResources | ForEach-Object {
+                if ($_.properties -and $_.properties.provisioningState) {
+                    "$ChildName ($($_.properties.provisioningState))"
+                } else {
+                    $ChildName
+                }
+            }) -join ', '
+            throw "Timed out waiting for $ResourceTypeLabel '$ChildName' to disappear from parent collection. Remaining: $states"
+        }
+
+        Write-Output "Waiting for $ResourceTypeLabel '$ChildName' to disappear from parent collection."
         Start-Sleep -Seconds $waitSleepSeconds
     } while ($true)
 }
@@ -518,8 +613,9 @@ if ($operation -eq "Create") {
 
 if ($operation -eq "Delete") {
     $expectedConfirmation = "DELETE $anfAccountName/$anfPoolName"
-    $volumesResponse = Get-AnfResourceOrNull -ResourceId "$poolResourceId/volumes" -ApiVersion $anfApiVersion
-    $volumes = if ($volumesResponse -and $volumesResponse.value) { @($volumesResponse.value) } else { @() }
+    $poolVolumesResourceId = "$poolResourceId/volumes"
+    $accountPoolsResourceId = "$accountResourceId/capacityPools"
+    $volumes = @(Get-AnfResourceCollectionValues -CollectionResourceId $poolVolumesResourceId -ApiVersion $anfApiVersion)
 
     if (Test-AnfYes -Value $testMode) {
         Write-Output "TEST MODE: Would delete $($volumes.Count) volume(s), capacity pool '$anfPoolName', and ANF account '$anfAccountName'."
@@ -539,13 +635,22 @@ if ($operation -eq "Delete") {
         $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $volume.id -ApiVersion $anfApiVersion
         Wait-AnfProvisioningState -ResourceId $volume.id -ApiVersion $anfApiVersion -WaitForDelete
     }
+    Wait-AnfChildResourceCollectionEmpty -CollectionResourceId $poolVolumesResourceId -ApiVersion $anfApiVersion -ResourceTypeLabel "volume(s) in pool '$anfPoolName'"
 
     if (Get-AnfResourceOrNull -ResourceId $poolResourceId -ApiVersion $anfApiVersion) {
         Write-Output "Deleting capacity pool '$anfPoolName'..."
         $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $poolResourceId -ApiVersion $anfApiVersion
         Wait-AnfProvisioningState -ResourceId $poolResourceId -ApiVersion $anfApiVersion -WaitForDelete
+        Wait-AnfNamedChildAbsent -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion -ChildName $anfPoolName -ResourceTypeLabel "capacity pool"
     } else {
         Write-Output "Capacity pool '$anfPoolName' was not found."
+        Wait-AnfNamedChildAbsent -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion -ChildName $anfPoolName -ResourceTypeLabel "capacity pool"
+    }
+
+    $remainingPools = @(Get-AnfResourceCollectionValues -CollectionResourceId $accountPoolsResourceId -ApiVersion $anfApiVersion)
+    if ($remainingPools.Count -gt 0) {
+        $remainingPoolNames = @($remainingPools | ForEach-Object { Get-AnfResourceShortName -Resource $_ }) -join ', '
+        throw "ANF account '$anfAccountName' still contains capacity pool(s): $remainingPoolNames. The account will not be deleted until all pools are gone."
     }
 
     if (Get-AnfResourceOrNull -ResourceId $accountResourceId -ApiVersion $anfApiVersion) {
