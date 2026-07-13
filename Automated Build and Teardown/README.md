@@ -44,7 +44,16 @@ Set these as environment variables before running from Cloud Shell or a local Po
 
 ## Create Example
 
+Cloud Shell PowerShell copy/paste example. Replace the values in the first block, paste the whole block into a new Cloud Shell session, and it will download the current WIP script from GitHub before running in test mode.
+
 ```powershell
+$workDir = Join-Path $HOME "anf-auto-build-teardown"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
+
+New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+Invoke-WebRequest -Uri $scriptUri -OutFile $scriptPath
+
 $env:ANF_Operation = "Create"
 $env:ANF_TestMode = "Yes"
 $env:ANF_ResourceGroupName = "<resource-group>"
@@ -56,7 +65,8 @@ $env:ANF_PoolSizeTiB = "2"
 $env:ANF_VolumeCount = "3"
 $env:ANF_VolumeSizeGiB = "100"
 $env:ANF_DelegatedSubnetId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>"
-pwsh ./ANF-Auto-Build-Teardown.ps1
+
+pwsh -NoProfile -File $scriptPath
 ```
 
 Review the preview output, then set `ANF_TestMode` to `No` for the live create run.
@@ -77,18 +87,42 @@ Flexible Service Level capacity and throughput are independent. The script sets 
 Preview delete:
 
 ```powershell
+$workDir = Join-Path $HOME "anf-auto-build-teardown"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
+
+New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+Invoke-WebRequest -Uri $scriptUri -OutFile $scriptPath
+
 $env:ANF_Operation = "Delete"
 $env:ANF_TestMode = "Yes"
-pwsh ./ANF-Auto-Build-Teardown.ps1
+$env:ANF_ResourceGroupName = "<resource-group>"
+$env:ANF_AccountName = "<anf-account>"
+$env:ANF_PoolName = "<capacity-pool>"
+$env:ANF_Location = "westus2"
+
+pwsh -NoProfile -File $scriptPath
 ```
 
 Live delete:
 
 ```powershell
+$workDir = Join-Path $HOME "anf-auto-build-teardown"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
+
+New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+Invoke-WebRequest -Uri $scriptUri -OutFile $scriptPath
+
 $env:ANF_Operation = "Delete"
 $env:ANF_TestMode = "No"
+$env:ANF_ResourceGroupName = "<resource-group>"
+$env:ANF_AccountName = "<anf-account>"
+$env:ANF_PoolName = "<capacity-pool>"
+$env:ANF_Location = "westus2"
 $env:ANF_DeleteConfirmation = "DELETE <account>/<pool>"
-pwsh ./ANF-Auto-Build-Teardown.ps1
+
+pwsh -NoProfile -File $scriptPath
 ```
 
 The delete path removes volumes first, then the capacity pool, then the ANF account.
