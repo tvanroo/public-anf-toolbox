@@ -30,7 +30,11 @@ Classic service levels use fixed pool throughput rates:
 - Premium: 64 MiB/s per TiB
 - Ultra: 128 MiB/s per TiB
 
-For Flexible Service Level, FSL uses the current manual pool throughput as the self-leveling budget. FSL pool throughput can be increased before volume throughput is raised, and pool throughput decreases are attempted after volume decreases. Azure NetApp Files can enforce a 24-hour cooldown after an FSL throughput increase, so a decrease may be deferred even when volume-level changes complete.
+The planner reserves throughput currently assigned to excluded volumes before calculating managed-volume targets. Excluded volumes are never changed by this runbook.
+
+Managed volumes consume the full remaining throughput budget for the pool. If metric pressure only requires a small amount of throughput, the unused budget is still redistributed across managed volumes instead of being left idle.
+
+If planned managed-volume throughput plus excluded-volume reservations exceeds the current pool budget, the runbook expands the pool budget before increasing volume throughput. Standard, Premium, and Ultra pools are expanded by increasing capacity to the next whole TiB required by the service-level throughput rate. FSL uses the current manual pool throughput as the starting budget and is expanded by increasing purchased pool throughput when needed. FSL pool throughput decreases are attempted after volume decreases, but Azure NetApp Files can enforce a 24-hour cooldown after an FSL throughput increase, so a decrease may be deferred even when volume-level changes complete.
 
 Auto QoS classic pools can be converted to Manual QoS when `ANF_ConvertToManualMode` is `Yes`. In test mode, conversion and throughput changes are only reported.
 
@@ -80,5 +84,7 @@ Review the table output first. Set `ANF_TestMode` to `No` only after the planned
 
 - Volumes tagged with `ExcludeFromAnfQosSelfLeveling=true` are ignored and their throughput remains reserved from the managed budget.
 - If all volumes are excluded or a pool has no volumes, that pool is skipped.
+- Unused managed throughput is redistributed to managed volumes proportionally, with metric pressure taking precedence when `throughputLimitReached` is present.
+- If volume throughput targets exceed available pool throughput, the script increases classic pool capacity or FSL purchased throughput before applying volume increases.
 - Decreases require clean metric windows to avoid reducing throughput immediately after transient pressure clears.
 - The script uses ARM REST calls so it can run in the PowerShell 7.2 Automation runtime without ANF-specific or monitoring cmdlet modules.

@@ -21,7 +21,10 @@ Important behavior:
 - Supports Standard, Premium, Ultra, and Flexible Service Level capacity pools.
 - Auto QoS classic pools are converted to Manual QoS when ANF_ConvertToManualMode is Yes. In test mode, this conversion is only reported.
 - Classic service level throughput per TiB is hard-coded: Standard=16, Premium=64, Ultra=128 MiB/s.
-- FSL uses the current manual pool throughput as the self-leveling budget. FSL pool throughput decreases can be limited by a 24-hour cooldown after an increase.
+- Managed volumes consume the available managed pool throughput budget; unused budget is redistributed proportionally instead of being left idle.
+- If planned volume throughput exceeds current pool throughput, classic pools are expanded by capacity and FSL pools are expanded by purchased throughput before volume increases.
+- FSL pool throughput decreases can be limited by a 24-hour cooldown after an increase.
+- Excluded volumes keep their existing throughput allocations, and that throughput is reserved before managed-volume allocation.
 - Decreases require clean throughputLimitReached windows before they are applied.
 - Every configured capacity pool is processed independently; no throughput, service-level, metric, or volume math crosses pool boundaries.
 
@@ -350,6 +353,8 @@ if (Test-AnfYes -Value $testMode) {
 $anfApiVersion = "2026-04-01"
 $bytesPerGiB = [math]::Pow(1024, 3)
 $bytesPerTiB = [math]::Pow(1024, 4)
+$poolUpdateWaitMaxSeconds = 1800
+$poolUpdateWaitSleepSeconds = 20
 
 function Invoke-AnfArmJson {
     param(
@@ -478,6 +483,7 @@ function Convert-AnfRestPool {
     $resolvedSize = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('size', 'Size')
     $resolvedServiceLevel = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('serviceLevel', 'ServiceLevel')
     $resolvedQosType = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('qosType', 'QosType')
+    $resolvedProvisioningState = Get-AnfObjectProperty -InputObject $poolProperties -PropertyNames @('provisioningState', 'ProvisioningState')
     $resolvedThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $poolProperties
     if ($null -eq $resolvedThroughputMibps) {
         $resolvedThroughputMibps = 0
@@ -489,6 +495,7 @@ function Convert-AnfRestPool {
         Size = [double]$resolvedSize
         ServiceLevel = $resolvedServiceLevel
         QosType = $resolvedQosType
+        ProvisioningState = $resolvedProvisioningState
         TotalThroughputMibps = [double]$resolvedThroughputMibps
         Raw = $Pool
     }
@@ -579,6 +586,21 @@ function Update-AnfPoolQosTypeManual {
     $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $anfApiVersion -BodyJson $body
 }
 
+function Update-AnfPoolSize {
+    param(
+        [Parameter(Mandatory=$true)][string]$PoolResourceId,
+        [Parameter(Mandatory=$true)][double]$TargetSizeBytes
+    )
+
+    $body = @{
+        properties = @{
+            size = $TargetSizeBytes
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
 function Update-AnfVolumeThroughput {
     param(
         [Parameter(Mandatory=$true)][string]$VolumeResourceId,
@@ -642,6 +664,54 @@ function Get-AnfPoolThroughputBudgetMibps {
     return (Convert-ToWholeThroughputMibps -Value ($poolTiB * $throughputPerTiB) -Minimum 1)
 }
 
+function Get-AnfClassicPoolSizingForThroughput {
+    param(
+        [Parameter(Mandatory=$true)][object]$Pool,
+        [Parameter(Mandatory=$true)][int]$TargetPoolThroughputMibps
+    )
+
+    $throughputPerTiB = Get-AnfClassicManualThroughputPerTiB -ServiceLevel $Pool.ServiceLevel
+    $requiredTiB = [int][math]::Ceiling([double]$TargetPoolThroughputMibps / [double]$throughputPerTiB)
+    $currentTiB = [int][math]::Ceiling([double]$Pool.Size / $bytesPerTiB)
+    $targetTiB = [math]::Max(1, [math]::Max($requiredTiB, $currentTiB))
+
+    return [PSCustomObject]@{
+        SizeTiB = [int]$targetTiB
+        SizeBytes = [double]($targetTiB * $bytesPerTiB)
+        ThroughputMibps = [int]($targetTiB * $throughputPerTiB)
+        ThroughputPerTiB = [int]$throughputPerTiB
+    }
+}
+
+function Wait-AnfPoolThroughputBudget {
+    param(
+        [Parameter(Mandatory=$true)][string]$SubscriptionId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName,
+        [Parameter(Mandatory=$true)][string]$AccountName,
+        [Parameter(Mandatory=$true)][string]$PoolName,
+        [Parameter(Mandatory=$true)][int]$TargetPoolThroughputMibps
+    )
+
+    $deadline = (Get-Date).AddSeconds($poolUpdateWaitMaxSeconds)
+    do {
+        $pool = Get-AnfPool -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName
+        $budget = Get-AnfPoolThroughputBudgetMibps -Pool $pool
+        $provisioningState = "$($pool.ProvisioningState)"
+        $poolReady = [string]::IsNullOrWhiteSpace($provisioningState) -or $provisioningState.Equals("Succeeded", [System.StringComparison]::OrdinalIgnoreCase)
+        if ($budget -ge $TargetPoolThroughputMibps -and $poolReady) {
+            Write-Output "Confirmed pool throughput budget is $budget MiB/s."
+            return $pool
+        }
+
+        if ((Get-Date) -gt $deadline) {
+            throw "Timed out waiting for pool throughput budget to reach $TargetPoolThroughputMibps MiB/s and provisioning to complete. Current budget: $budget MiB/s. Current provisioning state: $provisioningState."
+        }
+
+        Write-Output "Waiting for pool throughput budget to reach $TargetPoolThroughputMibps MiB/s and provisioning to complete. Current budget: $budget MiB/s. Current provisioning state: $provisioningState."
+        Start-Sleep -Seconds $poolUpdateWaitSleepSeconds
+    } while ($true)
+}
+
 function Test-AnfMetricCleanForWindows {
     param(
         [Parameter(Mandatory=$true)][string]$VolumeResourceId,
@@ -698,6 +768,7 @@ function Get-AnfSelfLevelingPlan {
             ThroughputToGiveUpMibps = 0.0
             MetricWeightPercentage = 0.0
             NewThroughputMibps = 0
+            UnusedThroughputShareMibps = 0
             NetChangeInThroughputMibps = 0
         }
     }
@@ -737,6 +808,63 @@ function Get-AnfSelfLevelingPlan {
         if ($row.NewThroughputMibps -lt $row.CurrentThroughputMibps -and -not $row.CleanLastNFullDays) {
             $row.NewThroughputMibps = Convert-ToWholeThroughputMibps -Value $row.CurrentThroughputMibps -Minimum $MinimumThroughputPerVolume
         }
+    }
+
+    $plannedTargetTotal = [int](($volumeRows | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+    $targetManagedThroughputBudget = [int][math]::Max($ManagedThroughputBudgetMibps, $plannedTargetTotal)
+    $remainingThroughput = [int]($targetManagedThroughputBudget - $plannedTargetTotal)
+    if ($remainingThroughput -gt 0) {
+        $totalTargetThroughput = [double](($volumeRows | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+        $totalCurrentThroughputForWeights = [double](($volumeRows | Measure-Object -Property CurrentThroughputMibps -Sum).Sum)
+        $weightedRows = foreach ($row in $volumeRows) {
+            $weight = if ($totalMetric -gt 0) {
+                [double]$row.ThroughputLimitMetric
+            } elseif ($totalTargetThroughput -gt 0) {
+                [double]$row.NewThroughputMibps
+            } elseif ($totalCurrentThroughputForWeights -gt 0) {
+                [double]$row.CurrentThroughputMibps
+            } else {
+                1.0
+            }
+
+            [PSCustomObject]@{
+                ShortName = $row.ShortName
+                Row = $row
+                Weight = $weight
+                FractionalRemainder = 0.0
+            }
+        }
+
+        $totalWeight = [double](($weightedRows | Measure-Object -Property Weight -Sum).Sum)
+        if ($totalWeight -le 0) {
+            foreach ($weightedRow in $weightedRows) {
+                $weightedRow.Weight = 1.0
+            }
+            $totalWeight = [double]$weightedRows.Count
+        }
+
+        $extraAllocatedThroughput = 0
+        foreach ($weightedRow in $weightedRows) {
+            $rawExtra = ([double]$remainingThroughput * [double]$weightedRow.Weight) / $totalWeight
+            $extraThroughput = [int][math]::Floor($rawExtra)
+            $weightedRow.FractionalRemainder = [double]($rawExtra - $extraThroughput)
+            if ($extraThroughput -gt 0) {
+                $weightedRow.Row.NewThroughputMibps += $extraThroughput
+                $weightedRow.Row.UnusedThroughputShareMibps += $extraThroughput
+                $extraAllocatedThroughput += $extraThroughput
+            }
+        }
+
+        $roundingRemainder = [int]($remainingThroughput - $extraAllocatedThroughput)
+        if ($roundingRemainder -gt 0) {
+            foreach ($weightedRow in @($weightedRows | Sort-Object -Property FractionalRemainder, ShortName -Descending | Select-Object -First $roundingRemainder)) {
+                $weightedRow.Row.NewThroughputMibps += 1
+                $weightedRow.Row.UnusedThroughputShareMibps += 1
+            }
+        }
+    }
+
+    foreach ($row in $volumeRows) {
         $row.NetChangeInThroughputMibps = [int]($row.NewThroughputMibps - (Convert-ToWholeThroughputMibps -Value $row.CurrentThroughputMibps -Minimum 0))
     }
 
@@ -857,10 +985,14 @@ try {
         continue
     }
 
-    $excludedThroughputMibps = [int](($excludedVolumes | Measure-Object -Property ThroughputMibps -Sum).Sum)
+    $excludedThroughputMibps = [int][math]::Round([double](($excludedVolumes | Measure-Object -Property ThroughputMibps -Sum).Sum), 0, [System.MidpointRounding]::AwayFromZero)
     $managedThroughputBudgetMibps = [int]($poolThroughputBudgetMibps - $excludedThroughputMibps)
-    if ($managedThroughputBudgetMibps -le 0) {
-        throw "No managed throughput budget remains after excluded volume allocations. PoolBudget=$poolThroughputBudgetMibps MiB/s, Excluded=$excludedThroughputMibps MiB/s."
+    $minimumManagedThroughputMibps = [int]($managedVolumes.Count * $minimumThroughputPerVolume)
+    $planningManagedThroughputBudgetMibps = [int][math]::Max($managedThroughputBudgetMibps, $minimumManagedThroughputMibps)
+    Write-Output "Excluded volume throughput reserved: $excludedThroughputMibps MiB/s across $($excludedVolumes.Count) volume(s)"
+    Write-Output "Current managed throughput budget: $managedThroughputBudgetMibps MiB/s"
+    if ($managedThroughputBudgetMibps -lt $minimumManagedThroughputMibps) {
+        Write-Warning "Current pool throughput cannot satisfy excluded volume reservations and managed volume minimums. The run will plan a pool throughput increase before managed volume updates."
     }
 
     $volumeInputs = foreach ($anfVolume in $managedVolumes) {
@@ -879,16 +1011,41 @@ try {
         }
     }
 
-    $finalData = @(Get-AnfSelfLevelingPlan -Volumes $volumeInputs -ManagedThroughputBudgetMibps $managedThroughputBudgetMibps -MinimumThroughputPerVolume $minimumThroughputPerVolume -LevelingAgressionPercent $levelingAgressionPercent -ThroughputLimitMetricAllowance $throughputLimitMetricAllowance)
-    $unallocatedThroughputMibps = $managedThroughputBudgetMibps - [int](($finalData | Measure-Object -Property CurrentThroughputMibps -Sum).Sum)
+    $finalData = @(Get-AnfSelfLevelingPlan -Volumes $volumeInputs -ManagedThroughputBudgetMibps $planningManagedThroughputBudgetMibps -MinimumThroughputPerVolume $minimumThroughputPerVolume -LevelingAgressionPercent $levelingAgressionPercent -ThroughputLimitMetricAllowance $throughputLimitMetricAllowance)
+    $plannedManagedTargetThroughputMibps = [int](($finalData | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+    $plannedPoolTargetThroughputMibps = [int]($plannedManagedTargetThroughputMibps + $excludedThroughputMibps)
+    $classicPoolTargetSizing = $null
+
+    if ($isFlexibleServiceLevel) {
+        if ($plannedPoolTargetThroughputMibps -lt $minimumFslPoolThroughputMibps) {
+            $plannedPoolTargetThroughputMibps = $minimumFslPoolThroughputMibps
+        }
+        $expandedManagedThroughputBudgetMibps = [int]($plannedPoolTargetThroughputMibps - $excludedThroughputMibps)
+        if ($expandedManagedThroughputBudgetMibps -gt $plannedManagedTargetThroughputMibps) {
+            $finalData = @(Get-AnfSelfLevelingPlan -Volumes $volumeInputs -ManagedThroughputBudgetMibps $expandedManagedThroughputBudgetMibps -MinimumThroughputPerVolume $minimumThroughputPerVolume -LevelingAgressionPercent $levelingAgressionPercent -ThroughputLimitMetricAllowance $throughputLimitMetricAllowance)
+            $plannedManagedTargetThroughputMibps = [int](($finalData | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+            $plannedPoolTargetThroughputMibps = [int]($plannedManagedTargetThroughputMibps + $excludedThroughputMibps)
+        }
+    } else {
+        if ($plannedPoolTargetThroughputMibps -gt $poolThroughputBudgetMibps) {
+            $classicPoolTargetSizing = Get-AnfClassicPoolSizingForThroughput -Pool $anfPool -TargetPoolThroughputMibps $plannedPoolTargetThroughputMibps
+            $expandedManagedThroughputBudgetMibps = [int]($classicPoolTargetSizing.ThroughputMibps - $excludedThroughputMibps)
+            $finalData = @(Get-AnfSelfLevelingPlan -Volumes $volumeInputs -ManagedThroughputBudgetMibps $expandedManagedThroughputBudgetMibps -MinimumThroughputPerVolume $minimumThroughputPerVolume -LevelingAgressionPercent $levelingAgressionPercent -ThroughputLimitMetricAllowance $throughputLimitMetricAllowance)
+            $plannedManagedTargetThroughputMibps = [int](($finalData | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+            $plannedPoolTargetThroughputMibps = [int]($plannedManagedTargetThroughputMibps + $excludedThroughputMibps)
+        }
+    }
+
+    $currentManagedAllocatedThroughputMibps = [int][math]::Round([double](($finalData | Measure-Object -Property CurrentThroughputMibps -Sum).Sum), 0, [System.MidpointRounding]::AwayFromZero)
+    $unallocatedThroughputMibps = [int]($managedThroughputBudgetMibps - $currentManagedAllocatedThroughputMibps)
     $unallocatedRow = [PSCustomObject]@{
-        ShortName = "unallocated"
+        ShortName = if ($unallocatedThroughputMibps -lt 0) { "overallocated" } else { "unallocated" }
         VolumeId = ""
         ThroughputLimitMetric = 0
         CurrentThroughputMibps = $unallocatedThroughputMibps
         CleanLastNFullDays = $true
         Performant = ""
-        ThroughputToGiveUpMibps = $unallocatedThroughputMibps
+        ThroughputToGiveUpMibps = [math]::Max(0, $unallocatedThroughputMibps)
         MetricWeightPercentage = 0
         NewThroughputMibps = 0
         NetChangeInThroughputMibps = 0
@@ -897,25 +1054,25 @@ try {
     $displayData = @($finalData + $unallocatedRow)
     $displayData | Select-Object ShortName, ThroughputLimitMetric, Performant, CleanLastNFullDays, CurrentThroughputMibps, ThroughputToGiveUpMibps, MetricWeightPercentage, NewThroughputMibps, NetChangeInThroughputMibps | Format-Table -AutoSize
 
-    $plannedManagedTargetThroughputMibps = [int](($finalData | Measure-Object -Property NewThroughputMibps -Sum).Sum)
-    $plannedPoolTargetThroughputMibps = [int]($plannedManagedTargetThroughputMibps + $excludedThroughputMibps)
-    if ($isFlexibleServiceLevel -and $plannedPoolTargetThroughputMibps -lt $minimumFslPoolThroughputMibps) {
-        $plannedPoolTargetThroughputMibps = $minimumFslPoolThroughputMibps
-    }
     $poolThroughputDeltaMibps = $plannedPoolTargetThroughputMibps - $poolThroughputBudgetMibps
     Write-Output "Planned managed target throughput: $plannedManagedTargetThroughputMibps MiB/s"
+    Write-Output "Planned pool throughput target including excluded reservations: $plannedPoolTargetThroughputMibps MiB/s (delta $poolThroughputDeltaMibps MiB/s)"
     if ($isFlexibleServiceLevel) {
         Write-Output "Planned FSL pool throughput target: $plannedPoolTargetThroughputMibps MiB/s (delta $poolThroughputDeltaMibps MiB/s)"
+    } elseif ($classicPoolTargetSizing) {
+        Write-Output "Planned classic pool capacity target: $($classicPoolTargetSizing.SizeTiB) TiB for $($classicPoolTargetSizing.ThroughputMibps) MiB/s at $($classicPoolTargetSizing.ThroughputPerTiB) MiB/s per TiB"
     }
 
     $updates = @($finalData | Where-Object { $_.NetChangeInThroughputMibps -ne 0 })
-    if ($updates.Count -eq 0 -and (-not $isFlexibleServiceLevel -or $poolThroughputDeltaMibps -eq 0)) {
+    if ($updates.Count -eq 0 -and $poolThroughputDeltaMibps -eq 0) {
         Write-Output "All managed volumes in pool '$anfPoolName' are already at the self-leveling throughput values."
         continue
     }
 
     if (Test-AnfYes -Value $testMode) {
-        if ($isFlexibleServiceLevel -and $poolThroughputDeltaMibps -gt 0) {
+        if ((-not $isFlexibleServiceLevel) -and $poolThroughputDeltaMibps -gt 0 -and $classicPoolTargetSizing) {
+            Write-Output "TEST MODE: Classic pool capacity would be increased to $($classicPoolTargetSizing.SizeTiB) TiB before volume throughput increases, raising available throughput to $($classicPoolTargetSizing.ThroughputMibps) MiB/s."
+        } elseif ($isFlexibleServiceLevel -and $poolThroughputDeltaMibps -gt 0) {
             Write-Output "TEST MODE: FSL pool throughput would be increased to $plannedPoolTargetThroughputMibps MiB/s before volume updates."
         } elseif ($isFlexibleServiceLevel -and $poolThroughputDeltaMibps -lt 0) {
             Write-Output "TEST MODE: FSL pool throughput would be decreased to $plannedPoolTargetThroughputMibps MiB/s after volume updates. Decreases may be deferred by the 24-hour cooldown."
@@ -926,9 +1083,14 @@ try {
         continue
     }
 
-    if ($isFlexibleServiceLevel -and $poolThroughputDeltaMibps -gt 0) {
+    if ((-not $isFlexibleServiceLevel) -and $poolThroughputDeltaMibps -gt 0 -and $classicPoolTargetSizing) {
+        Write-Output "Increasing classic pool capacity before volume updates: $([math]::Round($anfPool.Size / $bytesPerTiB, 3)) -> $($classicPoolTargetSizing.SizeTiB) TiB"
+        Update-AnfPoolSize -PoolResourceId $anfPool.Id -TargetSizeBytes $classicPoolTargetSizing.SizeBytes
+        $anfPool = Wait-AnfPoolThroughputBudget -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetPoolThroughputMibps $plannedPoolTargetThroughputMibps
+    } elseif ($isFlexibleServiceLevel -and $poolThroughputDeltaMibps -gt 0) {
         Write-Output "Increasing FSL pool throughput before volume updates: $poolThroughputBudgetMibps -> $plannedPoolTargetThroughputMibps MiB/s"
         Update-AnfFslPoolThroughput -PoolResourceId $anfPool.Id -TargetThroughputMibps $plannedPoolTargetThroughputMibps
+        $anfPool = Wait-AnfPoolThroughputBudget -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $anfPoolName -TargetPoolThroughputMibps $plannedPoolTargetThroughputMibps
     }
 
     foreach ($row in @($updates | Sort-Object -Property NetChangeInThroughputMibps, ShortName)) {
