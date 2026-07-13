@@ -9,7 +9,7 @@ This lab helper creates or deletes an Azure NetApp Files account, one capacity p
 - `ANF_TestMode` defaults to `Yes`, so create and delete actions are previewed only.
 - Live delete requires `ANF_TestMode=No` and an exact `ANF_DeleteConfirmation` value.
 - The script is non-interactive. All decisions are supplied as variables so the planned action is visible before the run starts.
-- The resource group must already exist; this script does not create or delete the resource group.
+- The resource group must already exist. Delete mode attempts to delete it by default, but only if the group is empty after ANF teardown. If other resources remain, the script warns and leaves the resource group intact.
 - Delete mode removes volumes, then the capacity pool, then the ANF account, and waits for Azure to confirm each layer is gone before moving to the next layer.
 
 ## Inputs
@@ -21,6 +21,7 @@ Set these as environment variables before running from Cloud Shell or a local Po
 | `ANF_Operation` | `Create` | `Create` creates or verifies the account, pool, and volumes. `Delete` removes volumes, then pool, then account. |
 | `ANF_TestMode` | `Yes` | `Yes` previews actions only. Set to `No` for live create/delete. |
 | `ANF_DeleteConfirmation` | empty | Required only for live delete. Must exactly equal `DELETE <account>/<pool>`. |
+| `ANF_DeleteResourceGroupIfEmpty` | `Yes` | Deletes the resource group only if it is empty after the ANF account is gone. If other resources remain, the script warns and leaves the resource group intact. Set to `No` to always leave the resource group. |
 | `ANF_TenantId` | current context | Optional tenant ID for authentication. |
 | `ANF_SubscriptionId` | current context | Optional subscription ID. |
 | `ANF_ResourceGroupName` | required | Existing resource group that contains or will contain the ANF account. |
@@ -122,11 +123,16 @@ $env:ANF_AccountName = "<anf-account>"
 $env:ANF_PoolName = "<capacity-pool>"
 $env:ANF_Location = "westus2"
 $env:ANF_DeleteConfirmation = "DELETE <account>/<pool>"
+# Default: delete the resource group only if no resources remain after teardown.
+# Set to "No" to always leave the resource group.
+$env:ANF_DeleteResourceGroupIfEmpty = "Yes"
 
 pwsh -NoProfile -File $scriptPath
 ```
 
 The delete path removes volumes first, waits until the pool's volume list is empty, removes the capacity pool, waits until the account no longer lists that pool, and only then removes the ANF account. If any capacity pool still remains in the account, the script stops instead of attempting the account delete.
+
+Resource group deletion is enabled by default but still guarded. When `ANF_DeleteResourceGroupIfEmpty=Yes`, the script lists resources in the resource group after ANF account deletion. If any resource remains, it writes a warning with the remaining resource names and leaves the resource group in place. Set `ANF_DeleteResourceGroupIfEmpty=No` to skip the resource group delete check entirely.
 
 ## Notes
 

@@ -20,6 +20,7 @@ This script is intended for lab/test environments, not production teardown workf
 Important safety behavior:
 - ANF_TestMode defaults to Yes. In test mode, create/delete actions are only reported.
 - Delete mode with ANF_TestMode=No requires ANF_DeleteConfirmation to exactly match DELETE <account>/<pool>.
+- Delete mode attempts resource group deletion by default, but only after confirming it is empty. Set ANF_DeleteResourceGroupIfEmpty=No to always leave the resource group.
 - The script is non-interactive so it can be reviewed, rerun, and automated without hidden prompts.
 
 Supported service levels:
@@ -136,6 +137,7 @@ $fslPoolThroughputMibps = Convert-AnfSettingToInt -Name "ANF_FslPoolThroughputMi
 $isLargeVolumeSetting = [string](Get-AnfSetting -Name "ANF_IsLargeVolume" -Default "No")
 $largeVolumeMaximumSizeGiB = Convert-AnfSettingToInt -Name "ANF_LargeVolumeMaximumSizeGiB" -Value (Get-AnfSetting -Name "ANF_LargeVolumeMaximumSizeGiB" -Default 1048576) -Minimum 51200
 $deleteConfirmation = [string](Get-AnfSetting -Name "ANF_DeleteConfirmation" -Default "")
+$deleteResourceGroupIfEmpty = [string](Get-AnfSetting -Name "ANF_DeleteResourceGroupIfEmpty" -Default "Yes")
 $waitSleepSeconds = Convert-AnfSettingToInt -Name "ANF_WaitSleepSeconds" -Value (Get-AnfSetting -Name "ANF_WaitSleepSeconds" -Default 30) -Minimum 1
 $waitMaxSeconds = Convert-AnfSettingToInt -Name "ANF_WaitMaxSeconds" -Value (Get-AnfSetting -Name "ANF_WaitMaxSeconds" -Default 3600) -Minimum 60
 
@@ -155,6 +157,9 @@ if ($operation -notin @("Create", "Delete")) {
 
 if (-not (Test-AnfYes -Value $testMode) -and -not "$testMode".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "ANF_TestMode must be Yes or No. Current value: '$testMode'"
+}
+if (-not (Test-AnfYes -Value $deleteResourceGroupIfEmpty) -and -not "$deleteResourceGroupIfEmpty".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "ANF_DeleteResourceGroupIfEmpty must be Yes or No. Current value: '$deleteResourceGroupIfEmpty'"
 }
 
 if ($serviceLevel -notin @("Standard", "Premium", "Ultra", "Flexible")) {
@@ -201,6 +206,7 @@ Write-Output "Resource Group: $resourceGroupName"
 Write-Output "ANF Account: $anfAccountName"
 Write-Output "Capacity Pool: $anfPoolName"
 Write-Output "Location: $location"
+Write-Output "Delete Resource Group If Empty: $deleteResourceGroupIfEmpty"
 Write-Output "Service Level: $serviceLevel"
 Write-Output "QoS Type: $qosType"
 Write-Output "Pool Size: $poolSizeTiB TiB"
@@ -315,6 +321,43 @@ function Get-AnfResourceShortName {
     }
 
     return ""
+}
+
+function Get-AnfResourceDisplayName {
+    param([Parameter(Mandatory=$true)][object]$Resource)
+
+    $name = Get-AnfResourceShortName -Resource $Resource
+    if ($Resource.type) {
+        return "$($Resource.type)/$name"
+    }
+
+    return $name
+}
+
+function Get-AnfResourceGroupResources {
+    param([Parameter(Mandatory=$true)][string]$ResourceGroupResourceId)
+
+    return @(Get-AnfResourceCollectionValues -CollectionResourceId "$ResourceGroupResourceId/resources" -ApiVersion "2021-04-01")
+}
+
+function Remove-AnfResourceGroupIfEmpty {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceGroupResourceId,
+        [Parameter(Mandatory=$true)][string]$ResourceGroupName
+    )
+
+    $remainingResources = @(Get-AnfResourceGroupResources -ResourceGroupResourceId $ResourceGroupResourceId)
+    if ($remainingResources.Count -gt 0) {
+        $remainingResourceNames = @($remainingResources | ForEach-Object { Get-AnfResourceDisplayName -Resource $_ }) -join ', '
+        Write-Warning "Skipping resource group deletion because it still contains resource(s): $remainingResourceNames"
+        return $false
+    }
+
+    Write-Output "Deleting empty resource group '$ResourceGroupName'..."
+    $null = Invoke-AnfArmJson -Method "DELETE" -ResourceId $ResourceGroupResourceId -ApiVersion "2021-04-01"
+    Wait-AnfProvisioningState -ResourceId $ResourceGroupResourceId -ApiVersion "2021-04-01" -WaitForDelete
+    Write-Output "Resource group '$ResourceGroupName' deleted."
+    return $true
 }
 
 function New-AnfResourceId {
@@ -622,6 +665,9 @@ if ($operation -eq "Delete") {
         foreach ($volume in $volumes) {
             Write-Output "TEST MODE: Would delete volume: $($volume.name)"
         }
+        if (Test-AnfYes -Value $deleteResourceGroupIfEmpty) {
+            Write-Output "TEST MODE: Would delete resource group '$resourceGroupName' only if it is empty after ANF account deletion."
+        }
         Write-Output "TEST MODE: Live delete requires ANF_TestMode=No and ANF_DeleteConfirmation='$expectedConfirmation'."
         return
     }
@@ -659,6 +705,12 @@ if ($operation -eq "Delete") {
         Wait-AnfProvisioningState -ResourceId $accountResourceId -ApiVersion $anfApiVersion -WaitForDelete
     } else {
         Write-Output "ANF account '$anfAccountName' was not found."
+    }
+
+    if (Test-AnfYes -Value $deleteResourceGroupIfEmpty) {
+        $null = Remove-AnfResourceGroupIfEmpty -ResourceGroupResourceId $resourceGroupResourceId -ResourceGroupName $resourceGroupName
+    } else {
+        Write-Output "Resource group deletion is disabled. Leaving resource group '$resourceGroupName' in place."
     }
 
     Write-Output "ANF delete workflow completed."
