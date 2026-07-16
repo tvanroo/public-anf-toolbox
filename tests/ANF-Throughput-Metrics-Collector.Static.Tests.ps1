@@ -92,6 +92,7 @@ Assert-Contains -Haystack $readmeText -Needle 'media/throughput-metrics-collecto
 Assert-Contains -Haystack $readmeText -Needle 'read-only' -Message 'Expected README to emphasize read-only behavior.'
 Assert-Contains -Haystack $readmeText -Needle 'Standard, Premium, Ultra, and Flexible Service Level' -Message 'Expected README to clarify service-level coverage.'
 Assert-Contains -Haystack $readmeText -Needle 'Copy this block as-is' -Message 'Expected README quick start to run without required edits.'
+Assert-Contains -Haystack $readmeText -Needle '$RepoRef = "main"' -Message 'Expected published README quick start to download from main.'
 Assert-Contains -Haystack $readmeText -Needle '# Download and prep the script.' -Message 'Expected README quick start to keep the download and prep section.'
 Assert-Contains -Haystack $readmeText -Needle '$DownloadStamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")' -Message 'Expected README quick start to use a cache-busting timestamp.'
 Assert-Contains -Haystack $readmeText -Needle '$ScriptPath = Join-Path (Get-Location) $ScriptName' -Message 'Expected README quick start to keep a stable downloaded script filename.'
@@ -109,6 +110,8 @@ Assert-Contains -Haystack $readmeText -Needle '| `ANF_OutputPath` |' -Message 'E
 Assert-Contains -Haystack $readmeText -Needle 'Each capacity pool is queried independently' -Message 'Expected README to document no cross-pool assumptions.'
 Assert-NotContains -Haystack $readmeText -Needle 'Az.NetAppFiles' -Message 'Expected README not to list stale module requirement.'
 Assert-NotContains -Haystack $readmeText -Needle 'Az.Monitor' -Message 'Expected README not to list stale module requirement.'
+Assert-NotContains -Haystack $readmeText -Needle 'codex/throughput-metrics-modernization' -Message 'Expected published README not to reference the WIP branch.'
+Assert-NotContains -Haystack $readmeText -Needle 'current WIP branch' -Message 'Expected published README not to describe a WIP branch.'
 
 if (-not (Test-Path -LiteralPath $behaviorImagePath)) {
     throw 'Expected Throughput Metrics Collector behavior graphic to exist.'

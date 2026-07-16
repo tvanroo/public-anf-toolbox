@@ -6,10 +6,10 @@ This read-only script exports historical Azure NetApp Files volume throughput me
 
 ## Cloud Shell / PowerShell Quick Start
 
-Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads and prepares the script from the current WIP branch, then discovers ANF volumes in the selected subscription.
+Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads and prepares the current script from GitHub, then discovers ANF volumes in the selected subscription.
 
 ```powershell
-$RepoRef = "codex/throughput-metrics-modernization"
+$RepoRef = "main"
 $ScriptName = "ANF-throughput-metrics-collector.ps1"
 $DownloadStamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
 $ScriptPath = Join-Path (Get-Location) $ScriptName
