@@ -19,20 +19,24 @@ This script is read-only. It does not resize pools, resize volumes, change QoS, 
 
 Supported targets:
 - Standard, Premium, Ultra, and Flexible Service Level capacity pools.
-- One or more capacity pools, supplied as full Resource IDs.
-- All volumes in each pool, or a filtered set of volume names.
+- All visible ANF capacity pools discovered from the authenticated Azure context by default.
+- One or more explicit capacity pools, optionally supplied as full Resource IDs.
+- Optional account, pool, and volume text filters.
 
 Settings can be supplied as Azure Automation variables or as process environment variables with the same names.
 
 Required:
-- ANF_CapacityPoolResourceId: One or more capacity pool Resource IDs separated by new lines, semicolons, or commas.
+- None. With no target variables set, the script discovers ANF capacity pools visible to the authenticated identity.
 
 Optional:
 - ANF_TenantId: Azure tenant ID. If omitted, the current Azure context tenant is used.
-- ANF_VolumeName: Optional volume name filter. Multiple values can be separated by new lines, semicolons, or commas.
+- ANF_CapacityPoolResourceId: Optional explicit capacity pool Resource IDs separated by new lines, semicolons, or commas.
+- ANF_AccountNameFilter: Optional account name text filter. Multiple values can be separated by new lines, semicolons, or commas.
+- ANF_PoolNameFilter: Optional capacity pool name text filter. Multiple values can be separated by new lines, semicolons, or commas.
+- ANF_VolumeNameFilter: Optional volume name text filter. Multiple values can be separated by new lines, semicolons, or commas.
 - ANF_LookBackDays: Metric lookback in days. Default: 30.
 - ANF_TimeGrainMinutes: Metric interval in minutes. Default: 5.
-- ANF_OutputPath: CSV output path. Default: ./ANF-throughput-metrics.csv.
+- ANF_OutputPath: CSV output path. Default: timestamped ./ANF-throughput-metrics-<yyyyMMdd-HHmmssZ>.csv.
 - ANF_OverwriteOutput: Yes/No overwrite guard for existing CSV output. Default: No.
 #>
 
@@ -117,6 +121,25 @@ function Split-AnfSettingList {
     return @("$Value" -split '[\r\n;,]+' | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
 }
 
+function Test-AnfTextFilter {
+    param(
+        [Parameter(Mandatory=$true)][string]$Value,
+        [Parameter()][string[]]$Filters = @()
+    )
+
+    if ($Filters.Count -eq 0) {
+        return $true
+    }
+
+    foreach ($filter in $Filters) {
+        if ($Value.IndexOf($filter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Resolve-AnfCapacityPoolResourceId {
     param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceId)
 
@@ -181,23 +204,23 @@ function Get-AnfObjectProperty {
 }
 
 $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default ""
-$capacityPoolResourceIdSetting = Get-AnfSetting -Name "ANF_CapacityPoolResourceId"
+$capacityPoolResourceIdSetting = Get-AnfSetting -Name "ANF_CapacityPoolResourceId" -Default ""
 $anfTargets = @()
 if ($capacityPoolResourceIdSetting) {
     $anfTargets = @(Resolve-AnfCapacityPoolResourceIds -CapacityPoolResourceIds $capacityPoolResourceIdSetting)
 }
 
-if ($anfTargets.Count -eq 0) {
-    Write-Error "ANF_CapacityPoolResourceId must be set before running this script"
-    throw "Missing required variable: ANF_CapacityPoolResourceId"
-}
-
 $lookBackDays = Convert-AnfSettingToInt -Name "ANF_LookBackDays" -Value (Get-AnfSetting -Name "ANF_LookBackDays" -Default 30) -Minimum 1
 $timeGrainMinutes = Convert-AnfSettingToInt -Name "ANF_TimeGrainMinutes" -Value (Get-AnfSetting -Name "ANF_TimeGrainMinutes" -Default 5) -Minimum 1
-$outputPath = "$((Get-AnfSetting -Name "ANF_OutputPath" -Default "./ANF-throughput-metrics.csv"))"
+$runTimestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
+$defaultOutputPath = "./ANF-throughput-metrics-$runTimestamp.csv"
+$outputPath = "$((Get-AnfSetting -Name "ANF_OutputPath" -Default $defaultOutputPath))"
 $overwriteOutput = "$((Get-AnfSetting -Name "ANF_OverwriteOutput" -Default "No"))"
-$volumeNameFilters = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_VolumeName" -Default ""))
-$metricNames = "ReadThroughput,WriteThroughput,TotalThroughput,OtherThroughput"
+$accountNameFilters = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_AccountNameFilter" -Default ""))
+$poolNameFilters = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_PoolNameFilter" -Default ""))
+$volumeNameFilterSetting = Get-AnfSetting -Name "ANF_VolumeNameFilter" -Default (Get-AnfSetting -Name "ANF_VolumeName" -Default "")
+$volumeNameFilters = @(Split-AnfSettingList -Value $volumeNameFilterSetting)
+$metricNames = "ReadThroughput,WriteThroughput,TotalThroughput,OtherThroughput,throughputLimitReached"
 
 if (-not (Test-AnfYes -Value $overwriteOutput) -and -not "$overwriteOutput".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "ANF_OverwriteOutput must be Yes or No. Current value: '$overwriteOutput'"
@@ -209,11 +232,17 @@ if ((Test-Path -LiteralPath $outputPath) -and -not (Test-AnfYes -Value $overwrit
 
 Write-Output "=== ANF Throughput Metrics Collector Configuration ==="
 Write-Output "Execution Mode: $(if ($runningInAutomation) { 'Azure Automation Account' } else { 'Local/Manual Execution' })"
-Write-Output "Capacity Pool Targets: $($anfTargets.Count)"
-foreach ($anfTarget in $anfTargets) {
-    Write-Output "  - $($anfTarget.CapacityPoolResourceId)"
+Write-Output "Target Mode: $(if ($anfTargets.Count -gt 0) { 'Explicit capacity pool Resource ID list' } else { 'Discovery across visible Azure subscriptions' })"
+if ($anfTargets.Count -gt 0) {
+    Write-Output "Explicit Capacity Pool Targets: $($anfTargets.Count)"
+    foreach ($anfTarget in $anfTargets) {
+        Write-Output "  - $($anfTarget.CapacityPoolResourceId)"
+    }
 }
-Write-Output "Volume Filter: $(if ($volumeNameFilters.Count -gt 0) { $volumeNameFilters -join ', ' } else { 'All volumes in each pool' })"
+Write-Output "Account Filter: $(if ($accountNameFilters.Count -gt 0) { $accountNameFilters -join ', ' } else { 'None' })"
+Write-Output "Pool Filter: $(if ($poolNameFilters.Count -gt 0) { $poolNameFilters -join ', ' } else { 'None' })"
+Write-Output "Volume Filter: $(if ($volumeNameFilters.Count -gt 0) { $volumeNameFilters -join ', ' } else { 'All volumes in each matched pool' })"
+Write-Output "Metrics: $metricNames"
 Write-Output "Lookback: $lookBackDays day(s)"
 Write-Output "Interval: $timeGrainMinutes minute(s)"
 Write-Output "Output Path: $outputPath"
@@ -221,15 +250,7 @@ Write-Output "Overwrite Output: $overwriteOutput"
 
 $anfApiVersion = "2026-04-01"
 
-function Invoke-AnfArmJson {
-    param(
-        [Parameter(Mandatory=$true)][string]$Method,
-        [Parameter(Mandatory=$true)][string]$ResourceId,
-        [Parameter(Mandatory=$true)][string]$ApiVersion,
-        [Parameter()][string]$QueryString = "",
-        [Parameter()][string]$BodyJson
-    )
-
+function New-AnfArmHeaders {
     $context = Get-AzContext -ErrorAction Stop
     $resourceManagerUrl = $context.Environment.ResourceManagerUrl.TrimEnd('/')
     $token = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate(
@@ -242,6 +263,44 @@ function Invoke-AnfArmJson {
         "$resourceManagerUrl/"
     ).AccessToken
 
+    return [PSCustomObject]@{
+        ResourceManagerUrl = $resourceManagerUrl
+        Headers = @{
+            'Authorization' = "Bearer $token"
+            'Content-Type' = 'application/json'
+        }
+    }
+}
+
+function Invoke-AnfArmUriJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter()][string]$BodyJson,
+        [Parameter()][object]$ArmContext = $null
+    )
+
+    if (-not $ArmContext) {
+        $ArmContext = New-AnfArmHeaders
+    }
+
+    if ($BodyJson) {
+        return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $ArmContext.Headers -Body $BodyJson -ErrorAction Stop
+    }
+
+    return Invoke-RestMethod -Uri $Uri -Method $Method -Headers $ArmContext.Headers -ErrorAction Stop
+}
+
+function Invoke-AnfArmJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter()][string]$QueryString = "",
+        [Parameter()][string]$BodyJson
+    )
+
+    $armContext = New-AnfArmHeaders
     $normalizedQueryString = ""
     if ($QueryString) {
         $normalizedQueryString = "$QueryString"
@@ -252,17 +311,34 @@ function Invoke-AnfArmJson {
         }
     }
 
-    $uri = "$resourceManagerUrl$ResourceId" + "?api-version=$ApiVersion$normalizedQueryString"
-    $headers = @{
-        'Authorization' = "Bearer $token"
-        'Content-Type' = 'application/json'
+    $uri = "$($armContext.ResourceManagerUrl)$ResourceId" + "?api-version=$ApiVersion$normalizedQueryString"
+    return Invoke-AnfArmUriJson -Method $Method -Uri $uri -BodyJson $BodyJson -ArmContext $armContext
+}
+
+function Get-AnfArmListValues {
+    param(
+        [Parameter(Mandatory=$true)][string]$ResourceId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion
+    )
+
+    $values = @()
+    $response = Invoke-AnfArmJson -Method "GET" -ResourceId $ResourceId -ApiVersion $ApiVersion
+    while ($response) {
+        if ($response.value) {
+            $values += @($response.value)
+        } elseif ($response.id) {
+            $values += $response
+        }
+
+        $nextLink = Get-AnfObjectProperty -InputObject $response -PropertyNames @('nextLink', 'NextLink')
+        if (-not $nextLink) {
+            break
+        }
+
+        $response = Invoke-AnfArmUriJson -Method "GET" -Uri $nextLink
     }
 
-    if ($BodyJson) {
-        return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -Body $BodyJson -ErrorAction Stop
-    }
-
-    return Invoke-RestMethod -Uri $uri -Method $Method -Headers $headers -ErrorAction Stop
+    return @($values)
 }
 
 function New-AnfResourceId {
@@ -283,6 +359,141 @@ function New-AnfResourceId {
     }
 
     return $resourceId
+}
+
+function Resolve-AnfNetAppAccountResourceId {
+    param([Parameter(Mandatory=$true)][string]$AccountResourceId)
+
+    $normalizedResourceId = "$AccountResourceId".Trim().TrimEnd("/")
+    $pattern = '^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.NetApp/netAppAccounts/([^/]+)$'
+    if ($normalizedResourceId -notmatch $pattern) {
+        throw "Unexpected ANF account Resource ID format: $AccountResourceId"
+    }
+
+    return [PSCustomObject]@{
+        AccountResourceId = $normalizedResourceId
+        SubscriptionId = $Matches[1]
+        ResourceGroupName = $Matches[2]
+        AccountName = $Matches[3]
+    }
+}
+
+function Select-AnfCapacityPoolTargets {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Targets,
+        [Parameter()][string[]]$AccountFilters = @(),
+        [Parameter()][string[]]$PoolFilters = @()
+    )
+
+    return @($Targets | Where-Object {
+        (Test-AnfTextFilter -Value $_.AccountName -Filters $AccountFilters) -and
+        (Test-AnfTextFilter -Value $_.PoolName -Filters $PoolFilters)
+    })
+}
+
+function Get-AnfDiscoverySubscriptions {
+    try {
+        $subscriptions = @(Get-AzSubscription -ErrorAction Stop | Where-Object {
+            -not $_.State -or "$($_.State)".Equals("Enabled", [System.StringComparison]::OrdinalIgnoreCase)
+        })
+        if ($subscriptions.Count -gt 0) {
+            return @($subscriptions)
+        }
+    } catch {
+        Write-Warning "Unable to enumerate Azure subscriptions; falling back to the current context subscription. $($_.Exception.Message)"
+    }
+
+    $context = Get-AzContext -ErrorAction Stop
+    if (-not $context.Subscription -or -not $context.Subscription.Id) {
+        throw "Unable to resolve a subscription for ANF discovery. Set an Azure context or provide ANF_CapacityPoolResourceId."
+    }
+
+    return @([PSCustomObject]@{
+        Id = $context.Subscription.Id
+        Name = $context.Subscription.Name
+        State = "Current"
+    })
+}
+
+function Get-AnfDiscoveredCapacityPoolTargets {
+    param(
+        [Parameter()][string[]]$AccountFilters = @(),
+        [Parameter()][string[]]$PoolFilters = @()
+    )
+
+    $targets = @()
+    $seenResourceIds = @{}
+    $subscriptions = @(Get-AnfDiscoverySubscriptions)
+    Write-Output "Discovering ANF capacity pools across $($subscriptions.Count) visible subscription(s)..."
+
+    foreach ($subscription in $subscriptions) {
+        $subscriptionId = if ($subscription.Id) { "$($subscription.Id)" } else { "$($subscription.SubscriptionId)" }
+        $subscriptionName = if ($subscription.Name) { "$($subscription.Name)" } else { $subscriptionId }
+        if (-not $subscriptionId) {
+            Write-Warning "Skipping subscription entry with no subscription ID."
+            continue
+        }
+
+        try {
+            $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+            Write-Output "Scanning subscription: $subscriptionName ($subscriptionId)"
+            $accountResourceId = "/subscriptions/$subscriptionId/providers/Microsoft.NetApp/netAppAccounts"
+            $accounts = @(Get-AnfArmListValues -ResourceId $accountResourceId -ApiVersion $anfApiVersion)
+        } catch {
+            Write-Warning "Skipping subscription '$subscriptionName' because ANF account discovery failed: $($_.Exception.Message)"
+            continue
+        }
+
+        foreach ($account in $accounts) {
+            try {
+                $accountTarget = Resolve-AnfNetAppAccountResourceId -AccountResourceId $account.id
+            } catch {
+                Write-Warning $_.Exception.Message
+                continue
+            }
+
+            if (-not (Test-AnfTextFilter -Value $accountTarget.AccountName -Filters $AccountFilters)) {
+                continue
+            }
+
+            try {
+                $poolCollectionId = "$($accountTarget.AccountResourceId)/capacityPools"
+                $pools = @(Get-AnfArmListValues -ResourceId $poolCollectionId -ApiVersion $anfApiVersion)
+            } catch {
+                Write-Warning "Unable to list capacity pools for ANF account '$($accountTarget.AccountName)': $($_.Exception.Message)"
+                continue
+            }
+
+            foreach ($pool in $pools) {
+                try {
+                    $poolTarget = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $pool.id
+                } catch {
+                    Write-Warning $_.Exception.Message
+                    continue
+                }
+
+                if (-not (Test-AnfTextFilter -Value $poolTarget.PoolName -Filters $PoolFilters)) {
+                    continue
+                }
+
+                $dedupeKey = $poolTarget.CapacityPoolResourceId.ToLowerInvariant()
+                if ($seenResourceIds.ContainsKey($dedupeKey)) {
+                    continue
+                }
+
+                $seenResourceIds[$dedupeKey] = $true
+                $targets += $poolTarget
+            }
+        }
+    }
+
+    return @($targets)
+}
+
+function Test-AnfThroughputMetric {
+    param([Parameter(Mandatory=$true)][string]$MetricName)
+
+    return @('ReadThroughput', 'WriteThroughput', 'TotalThroughput', 'OtherThroughput').Contains($MetricName)
 }
 
 function Get-AnfVolumeShortName {
@@ -341,13 +552,7 @@ function Get-AnfVolumes {
     )
 
     $resourceId = "$(New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $PoolName)/volumes"
-    $volumesCandidate = Invoke-AnfArmJson -Method "GET" -ResourceId $resourceId -ApiVersion $anfApiVersion
-    $volumes = @()
-    if ($volumesCandidate -and $volumesCandidate.value) {
-        $volumes = @($volumesCandidate.value)
-    } elseif ($volumesCandidate -and $volumesCandidate.id) {
-        $volumes = @($volumesCandidate)
-    }
+    $volumes = @(Get-AnfArmListValues -ResourceId $resourceId -ApiVersion $anfApiVersion)
 
     return @($volumes | ForEach-Object { Convert-AnfRestVolume -Volume $_ })
 }
@@ -412,6 +617,22 @@ try {
     throw "Authentication failed"
 }
 
+if ($anfTargets.Count -gt 0) {
+    $anfTargets = @(Select-AnfCapacityPoolTargets -Targets $anfTargets -AccountFilters $accountNameFilters -PoolFilters $poolNameFilters)
+} else {
+    $anfTargets = @(Get-AnfDiscoveredCapacityPoolTargets -AccountFilters $accountNameFilters -PoolFilters $poolNameFilters)
+}
+
+if ($anfTargets.Count -eq 0) {
+    Write-Warning "No ANF capacity pools matched the current context and filters. No metrics were collected."
+    return
+}
+
+Write-Output "Matched Capacity Pool Targets: $($anfTargets.Count)"
+foreach ($anfTarget in $anfTargets) {
+    Write-Output "  - $($anfTarget.CapacityPoolResourceId)"
+}
+
 $endTimeUtc = (Get-Date).ToUniversalTime()
 $startTimeUtc = $endTimeUtc.AddDays(-$lookBackDays)
 $allMetricsData = @()
@@ -446,13 +667,9 @@ try {
     }
 
     if ($volumeNameFilters.Count -gt 0) {
-        $filterSet = @{}
-        foreach ($volumeNameFilter in $volumeNameFilters) {
-            $filterSet[$volumeNameFilter.ToLowerInvariant()] = $true
-        }
-        $anfVolumes = @($anfVolumes | Where-Object { $filterSet.ContainsKey($_.Name.ToLowerInvariant()) })
+        $anfVolumes = @($anfVolumes | Where-Object { Test-AnfTextFilter -Value $_.Name -Filters $volumeNameFilters })
         if ($anfVolumes.Count -eq 0) {
-            Write-Warning "No volumes in '$anfPoolName' matched ANF_VolumeName filter: $($volumeNameFilters -join ', ')"
+            Write-Warning "No volumes in '$anfPoolName' matched ANF_VolumeNameFilter: $($volumeNameFilters -join ', ')"
             continue
         }
     }
@@ -463,10 +680,13 @@ try {
         try {
             $metricResponse = Get-AnfMetricSeries -ResourceId $anfVolume.Id -MetricNames $metricNames -StartTimeUtc $startTimeUtc -EndTimeUtc $endTimeUtc -TimeGrainMinutes $timeGrainMinutes
             foreach ($metric in @($metricResponse.value)) {
-                $metricName = Get-AnfObjectProperty -InputObject $metric.name -PropertyNames @('value', 'Value', 'localizedValue', 'LocalizedValue')
+                $metricName = "$(Get-AnfObjectProperty -InputObject $metric.name -PropertyNames @('value', 'Value', 'localizedValue', 'LocalizedValue'))"
+                $metricUnit = Get-AnfObjectProperty -InputObject $metric -PropertyNames @('unit', 'Unit')
+                $isThroughputMetric = Test-AnfThroughputMetric -MetricName $metricName
                 foreach ($timeSeries in @($metric.timeseries)) {
                     foreach ($dataPoint in @($timeSeries.data)) {
                         if ($null -ne $dataPoint.average) {
+                            $averageValue = [double]$dataPoint.average
                             $allMetricsData += [PSCustomObject]@{
                                 Timestamp = $dataPoint.timeStamp
                                 SubscriptionId = $subscriptionId
@@ -478,8 +698,10 @@ try {
                                 VolumeName = $anfVolume.Name
                                 VolumeId = $anfVolume.Id
                                 MetricName = $metricName
-                                AverageBytesPerSecond = [math]::Round([double]$dataPoint.average, 3)
-                                AverageMiBps = [math]::Round(([double]$dataPoint.average / 1024 / 1024), 3)
+                                MetricUnit = if ($metricUnit) { $metricUnit } elseif ($isThroughputMetric) { "BytesPerSecond" } else { "Value" }
+                                AverageValue = [math]::Round($averageValue, 3)
+                                AverageBytesPerSecond = if ($isThroughputMetric) { [math]::Round($averageValue, 3) } else { $null }
+                                AverageMiBps = if ($isThroughputMetric) { [math]::Round(($averageValue / 1024 / 1024), 3) } else { $null }
                                 TimeGrainMinutes = $timeGrainMinutes
                             }
                         }
@@ -506,7 +728,7 @@ if ($failedCapacityPools.Count -gt 0) {
 }
 
 if ($allMetricsData.Count -eq 0) {
-    Write-Warning "No metrics data was collected. Check pool IDs, volume filters, metric availability, and RBAC permissions."
+    Write-Warning "No metrics data was collected. Check discovery scope, filters, metric availability, and RBAC permissions."
     return
 }
 

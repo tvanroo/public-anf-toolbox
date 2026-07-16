@@ -6,21 +6,22 @@ This read-only script exports historical Azure NetApp Files volume throughput me
 
 ## Cloud Shell / PowerShell Quick Start
 
-Copy this block, update the `ANF_*` values, and paste it into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads the script from the current WIP branch, unblocks it when that command is available, and runs it with the values you set.
+Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads the script from the current WIP branch, unblocks it when that command is available, and discovers every ANF volume visible to the current Azure context.
 
 ```powershell
-$env:ANF_CapacityPoolResourceId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
-$env:ANF_TenantId = ""
-$env:ANF_VolumeName = ""
-$env:ANF_LookBackDays = "30"
-$env:ANF_TimeGrainMinutes = "5"
-$env:ANF_OutputPath = "./ANF-throughput-metrics.csv"
-$env:ANF_OverwriteOutput = "No"
-
 $RepoRef = "codex/throughput-metrics-modernization"
 $ScriptName = "ANF-throughput-metrics-collector.ps1"
 $ScriptPath = Join-Path (Get-Location) $ScriptName
 $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName"
+
+# Optional filters. Leave these commented to collect every discovered ANF volume.
+# $env:ANF_AccountNameFilter = "prod"
+# $env:ANF_PoolNameFilter = "premium"
+# $env:ANF_VolumeNameFilter = "avd"
+
+# Optional collection settings.
+# $env:ANF_LookBackDays = "30"
+# $env:ANF_TimeGrainMinutes = "5"
 
 $ProgressPreference = "SilentlyContinue"
 Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath
@@ -43,10 +44,11 @@ After the script is downloaded, you can change only the `ANF_*` environment vari
 - `WriteThroughput`
 - `TotalThroughput`
 - `OtherThroughput`
+- `throughputLimitReached`
 
-Values are exported in bytes per second and MiB/s.
+Throughput metrics are exported in bytes per second and MiB/s. `throughputLimitReached` is exported as its average metric value and is not converted to MiB/s.
 
-Each capacity pool is queried independently. The script does not modify pools, volumes, QoS settings, capacity, or throughput.
+Each capacity pool is queried independently. The script discovers capacity pools across visible Azure subscriptions by default and does not modify pools, volumes, QoS settings, capacity, or throughput.
 
 ## Inputs
 
@@ -54,24 +56,26 @@ Set these as environment variables before running from Cloud Shell or a local Po
 
 | Variable | Default | Impact |
 | --- | --- | --- |
-| `ANF_CapacityPoolResourceId` | required | One or more full capacity pool Resource IDs. Separate multiple IDs with new lines, semicolons, or commas. |
 | `ANF_TenantId` | current context | Optional tenant ID used when authentication needs to switch tenants. |
-| `ANF_VolumeName` | all volumes | Optional volume name filter. Multiple names can be separated with new lines, semicolons, or commas. |
+| `ANF_CapacityPoolResourceId` | discover visible pools | Optional explicit target override with one or more full capacity pool Resource IDs. Separate multiple IDs with new lines, semicolons, or commas. |
+| `ANF_AccountNameFilter` | all accounts | Optional account name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
+| `ANF_PoolNameFilter` | all pools | Optional capacity pool name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
+| `ANF_VolumeNameFilter` | all volumes | Optional volume name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_LookBackDays` | `30` | Number of trailing days to request from Azure Monitor. |
 | `ANF_TimeGrainMinutes` | `5` | Metric interval in minutes. |
-| `ANF_OutputPath` | `./ANF-throughput-metrics.csv` | CSV output path. |
-| `ANF_OverwriteOutput` | `No` | `No` protects an existing output file. Set to `Yes` to overwrite. |
+| `ANF_OutputPath` | `./ANF-throughput-metrics-<timestamp>.csv` | CSV output path. The default includes a UTC timestamp such as `20260716-214530Z`. |
+| `ANF_OverwriteOutput` | `No` | `No` protects an existing output file. The timestamped default normally avoids collisions. Set to `Yes` only when intentionally reusing an output path. |
 
-## Example
+## Optional Narrowing Examples
 
 ```powershell
-$env:ANF_CapacityPoolResourceId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
-$env:ANF_OutputPath = "./anf-throughput.csv"
-$env:ANF_OverwriteOutput = "No"
-pwsh ./ANF-throughput-metrics-collector.ps1
+$env:ANF_AccountNameFilter = "prod"
+$env:ANF_PoolNameFilter = "premium"
+$env:ANF_VolumeNameFilter = "avd"
+& ./ANF-throughput-metrics-collector.ps1
 ```
 
-Multiple pools can be collected in one run:
+To bypass discovery and target specific pools:
 
 ```powershell
 $env:ANF_CapacityPoolResourceId = @"
@@ -92,6 +96,8 @@ $env:ANF_CapacityPoolResourceId = @"
 - `VolumeName`
 - `VolumeId`
 - `MetricName`
+- `MetricUnit`
+- `AverageValue`
 - `AverageBytesPerSecond`
 - `AverageMiBps`
 - `TimeGrainMinutes`
