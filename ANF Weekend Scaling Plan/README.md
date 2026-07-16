@@ -68,6 +68,8 @@ The word `Standard` in Windows time zone IDs does not mean daylight saving time 
 
 If your required Windows time zone ID is not in the deployment dropdown, leave the script in `ANF_TestMode=Yes`, deploy with any listed value, then edit the `ANF_TimeZone` Automation variable before setting `ANF_TestMode` to `No`.
 
+For the complete Microsoft-maintained reference list, see [Default Time Zones](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/default-time-zones?view=windows-11). On a Windows machine, `tzutil /l` also returns the current local list of available Windows time zone IDs.
+
 Common examples:
 
 | Region | Example `ANF_TimeZone` value |
