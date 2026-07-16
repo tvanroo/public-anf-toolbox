@@ -490,15 +490,18 @@ function Select-AnfDiscoverySubscriptions {
         return @($currentSubscription)
     }
 
-    Write-Host ""
-    Write-Host "Multiple active Azure subscriptions are visible. Select one for ANF discovery:"
+    $subscriptionPromptLines = [System.Collections.Generic.List[string]]::new()
+    $subscriptionPromptLines.Add("")
+    $subscriptionPromptLines.Add("Multiple active Azure subscriptions are visible. Select one for ANF discovery:")
     for ($index = 0; $index -lt $Subscriptions.Count; $index++) {
         $subscription = $Subscriptions[$index]
-        Write-Host ("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription))
+        $subscriptionPromptLines.Add(("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription)))
     }
+    $subscriptionPromptLines.Add("Enter subscription number")
+    $subscriptionPrompt = $subscriptionPromptLines -join [Environment]::NewLine
 
     while ($true) {
-        $selection = Read-Host "Enter subscription number"
+        $selection = Read-Host $subscriptionPrompt
         $selectionNumber = 0
         if ([int]::TryParse($selection, [ref]$selectionNumber) -and $selectionNumber -ge 1 -and $selectionNumber -le $Subscriptions.Count) {
             return @($Subscriptions[$selectionNumber - 1])
