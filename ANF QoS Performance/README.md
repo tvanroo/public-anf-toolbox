@@ -14,8 +14,8 @@ By using any content from this repository, you acknowledge that you do so at you
 
 This modernization is on the `codex/qos-performance-modernization` branch for testing.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex/qos-performance-modernization%2FANF%2520QoS%2520Performance%2Fdeploy%2Fazuredeploy.json)
-[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex/qos-performance-modernization%2FANF%2520QoS%2520Performance%2Fdeploy%2Fazuredeploy-gov.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-performance-modernization%2FANF%2520QoS%2520Performance%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fqos-performance-modernization%2FANF%2520QoS%2520Performance%2Fdeploy%2Fazuredeploy-gov.json)
 
 [ANF QoS Performance](./ANF-QoS-Autoscale-PerformanceBased.ps1)
     - Assigns Manual QoS volume throughput based on historical average throughput usage metrics.
