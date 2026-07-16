@@ -1057,10 +1057,14 @@ try {
             Write-Output "TEST MODE: Would convert empty target pool '$desiredPoolName' from Auto QoS to Manual QoS before moving volumes."
         }
         if ($sourceQosType -eq "Manual") {
-            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "target-service-level" -DecreasesOnly $false -IncreasesOnly $false
+            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "pre-move decrease" -DecreasesOnly $true -IncreasesOnly $false
         }
         foreach ($volume in $volumesToMove) {
             Write-Output "TEST MODE: Would move volume '$($volume.Name)' from '$($sourceState.PoolName)' to '$desiredPoolName'."
+        }
+        if ($sourceQosType -eq "Manual") {
+            Write-Output "TEST MODE: Would refresh moved volumes from target pool '$desiredPoolName' before applying Manual QoS increases."
+            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "post-move increase" -DecreasesOnly $false -IncreasesOnly $true
         }
         Write-Output "TEST MODE: Would remove source pool '$($sourceState.PoolName)' after successful volume moves."
         continue

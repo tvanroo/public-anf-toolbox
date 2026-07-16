@@ -87,6 +87,8 @@ Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfManualMimicAutoPl
 Assert-Contains -Haystack $scriptText -Needle 'Update-AnfVolumeThroughput' -Message 'Expected Manual QoS volume throughput update helper.'
 Assert-Contains -Haystack $scriptText -Needle 'pre-move decrease' -Message 'Expected Manual QoS decreases to be applied before pool moves.'
 Assert-Contains -Haystack $scriptText -Needle 'post-move increase' -Message 'Expected Manual QoS increases to be applied after pool moves.'
+Assert-Contains -Haystack $scriptText -Needle 'Would refresh moved volumes from target pool' -Message 'Expected test mode to show Manual QoS increases after simulated pool moves.'
+Assert-NotContains -Haystack $scriptText -Needle 'target-service-level' -Message 'Expected test mode not to preview generic target throughput changes before pool moves.'
 Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekendPoolName' -Message 'Expected advanced optional weekend pool name override.'
 Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekdayPoolName' -Message 'Expected advanced optional weekday pool name override.'
 Assert-Contains -Haystack $scriptText -Needle '$initialPoolName-weekday' -Message 'Expected weekday pool name to default from the initial pool name.'
