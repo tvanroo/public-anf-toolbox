@@ -11,8 +11,9 @@ Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell se
 ```powershell
 $RepoRef = "codex/throughput-metrics-modernization"
 $ScriptName = "ANF-throughput-metrics-collector.ps1"
-$ScriptPath = Join-Path (Get-Location) $ScriptName
-$ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName"
+$DownloadStamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
+$ScriptPath = Join-Path (Get-Location) "ANF-throughput-metrics-collector-$DownloadStamp.ps1"
+$ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName`?cacheBust=$DownloadStamp"
 
 # Optional filters. Leave these commented to collect every discovered ANF volume.
 # $env:ANF_SubscriptionId = "<subscription-id-or-name>"
