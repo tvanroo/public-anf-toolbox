@@ -134,7 +134,7 @@
       "repository": "https://github.com/tvanroo/public-anf-toolbox",
       "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Self%20Leveling",
       "script": "ANF-QoS-Autoscale-SelfLeveling.ps1",
-      "status": "wip"
+      "status": "published"
     }
   },
   "resources": [

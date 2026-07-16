@@ -70,7 +70,7 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-performance-modernization/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
@@ -97,9 +97,9 @@
       "managed-by": "public-anf-toolbox",
       "solution": "anf-qos-performance",
       "repository": "https://github.com/tvanroo/public-anf-toolbox",
-      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/codex/qos-performance-modernization/ANF%20QoS%20Performance",
+      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Performance",
       "script": "ANF-QoS-Autoscale-PerformanceBased.ps1",
-      "status": "wip"
+      "status": "published"
     }
   },
   "resources": [

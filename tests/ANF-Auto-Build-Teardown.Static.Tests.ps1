@@ -91,7 +91,7 @@ Assert-Contains -Haystack $readmeText -Needle '`ANF_IsLargeVolume`' -Message 'Ex
 Assert-Contains -Haystack $readmeText -Needle 'waits for Azure to confirm each layer is gone' -Message 'Expected README to document ordered delete waits.'
 Assert-Contains -Haystack $readmeText -Needle 'CannotDeleteResource' -Message 'Expected README to document retry behavior when Azure still reports nested resources.'
 Assert-Contains -Haystack $readmeText -Needle 'Invoke-WebRequest -Uri $scriptUri -OutFile $scriptPath' -Message 'Expected README examples to download the script from GitHub for fresh Cloud Shell runs.'
-Assert-Contains -Haystack $readmeText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1' -Message 'Expected README examples to pull the WIP script from GitHub.'
+Assert-Contains -Haystack $readmeText -Needle 'raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1' -Message 'Expected README examples to pull the published script from GitHub.'
 Assert-Contains -Haystack $readmeText -Needle 'pwsh -NoProfile -File $scriptPath' -Message 'Expected README examples to run the downloaded script path.'
 Assert-NotContains -Haystack $readmeText -Needle 'Az.NetAppFiles' -Message 'Expected README not to list stale module requirement.'
 

@@ -46,11 +46,11 @@ Set these as environment variables before running from Cloud Shell or a local Po
 
 ## Create Example
 
-Cloud Shell PowerShell copy/paste example. Replace the values in the first block, paste the whole block into a new Cloud Shell session, and it will download the current WIP script from GitHub before running in test mode.
+Cloud Shell PowerShell copy/paste example. Replace the values in the first block, paste the whole block into a new Cloud Shell session, and it will download the current script from GitHub before running in test mode.
 
 ```powershell
 $workDir = Join-Path $HOME "anf-auto-build-teardown"
-$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
 $scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
 
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -90,7 +90,7 @@ Preview delete:
 
 ```powershell
 $workDir = Join-Path $HOME "anf-auto-build-teardown"
-$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
 $scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
 
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
@@ -110,7 +110,7 @@ Live delete:
 
 ```powershell
 $workDir = Join-Path $HOME "anf-auto-build-teardown"
-$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/auto-build-teardown-modernization/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
+$scriptUri = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/Automated%20Build%20and%20Teardown/ANF-Auto-Build-Teardown.ps1"
 $scriptPath = Join-Path $workDir "ANF-Auto-Build-Teardown.ps1"
 
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null

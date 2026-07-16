@@ -63,14 +63,14 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-performance-modernization/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Performance/ANF-QoS-Autoscale-PerformanceBased.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
     }
   },
   "variables": {
-    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-performance-modernization/ANF%20QoS%20Performance/deploy/azuredeploy.json",
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Performance/deploy/azuredeploy.json",
     "editableTestModeVariable": "ANF_TestMode",
     "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId",
     "editableMinimumThroughputVariable": "ANF_MinimumThroughputPerVolume",
