@@ -26,20 +26,6 @@
         "description": "Yes = preview only. No = create target pool, move volumes, and remove the previous source pool."
       }
     },
-    "weekdayPoolName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Weekday target pool name. Leave blank to use <initial-pool>-weekday."
-      }
-    },
-    "weekendPoolName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Weekend target pool name. Leave blank to use <initial-pool>-weekend."
-      }
-    },
     "weekdayServiceLevel": {
       "type": "string",
       "defaultValue": "Ultra",
@@ -302,32 +288,6 @@
     {
       "type": "Microsoft.Automation/automationAccounts/variables",
       "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_WeekdayPoolName')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Weekday target pool name. Blank uses <initial-pool>-weekday.",
-        "value": "[concat('\"', parameters('weekdayPoolName'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_WeekendPoolName')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Weekend target pool name. Blank uses <initial-pool>-weekend.",
-        "value": "[concat('\"', parameters('weekendPoolName'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
       "name": "[concat(variables('automationAccountName'), '/ANF_WeekdayServiceLevel')]",
       "dependsOn": [
         "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
@@ -498,14 +458,6 @@
     "capacityPoolResourceIdVariable": {
       "type": "string",
       "value": "ANF_CapacityPoolResourceId"
-    },
-    "weekdayPoolNameVariable": {
-      "type": "string",
-      "value": "ANF_WeekdayPoolName"
-    },
-    "weekendPoolNameVariable": {
-      "type": "string",
-      "value": "ANF_WeekendPoolName"
     },
     "weekdayServiceLevelVariable": {
       "type": "string",

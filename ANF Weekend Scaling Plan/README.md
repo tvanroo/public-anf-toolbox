@@ -45,8 +45,6 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 | `ANF_TenantId` | deployment tenant | Optional tenant selection. |
 | `ANF_CapacityPoolResourceId` | required | One or more initial capacity pool Resource IDs. The initial pool may be removed after the first successful move; the Resource ID still identifies the subscription, resource group, ANF account, and initial pool name for the managed pool set. Multiple IDs can be separated by new lines, semicolons, or commas. |
 | `ANF_TestMode` | `Yes` | `Yes` previews only; `No` creates the target pool, moves volumes, and removes the previous source pool. This must be `No` before any live changes are written. |
-| `ANF_WeekdayPoolName` | blank | Weekday target pool name. Blank uses `<initial-pool>-weekday`. |
-| `ANF_WeekendPoolName` | blank | Weekend target pool name. Blank uses `<initial-pool>-weekend`. |
 | `ANF_WeekdayServiceLevel` | `Ultra` | Classic service level for the weekday pool. |
 | `ANF_WeekendServiceLevel` | `Standard` | Classic service level for the weekend pool. |
 | `ANF_WeekendStartDay` | `Friday` | Day when the weekend window begins. |
@@ -55,6 +53,8 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 | `ANF_WeekendEndDay` | `Monday` | Day when the weekend window ends. |
 | `ANF_WeekendEndTime` | `06:00` | Time when the weekend window ends, in `HH:mm` format. |
 | `ANF_TimeZone` | `Central Standard Time` | Time zone used by the runbook to evaluate the schedule. |
+
+Weekday and weekend pool names are derived automatically from the initial pool name parsed from `ANF_CapacityPoolResourceId`: `<initial-pool>-weekday` and `<initial-pool>-weekend`. The deployment workflow does not ask for pool names because this script manages the full pool set rather than individual volume targets.
 
 ## Behavior
 
@@ -74,7 +74,7 @@ To manage more than one initial pool set from the same Automation Account, edit 
 
 Each configured pool set is processed independently. For every configured initial pool Resource ID, the runbook re-reads the subscription, resource group, ANF account, initial pool, weekday pool, weekend pool, volume placement, service levels, and QoS type before calculating changes. There is no pool state, volume placement, or schedule math shared across pool sets.
 
-The policy variables above are shared across all pool sets in the same Automation Account. Deploy a second Automation Account when different pool sets need different target service levels, pool names, or weekend windows.
+The policy variables above are shared across all pool sets in the same Automation Account. Deploy a second Automation Account when different pool sets need different target service levels or weekend windows.
 
 The initial deployment assigns the Automation Account managed identity to the ANF account parsed from the Resource ID entered during deployment. If you later add pool Resource IDs from other ANF accounts or subscriptions, grant that same managed identity `Azure NetApp Files Administrator` on each additional target ANF account before expecting those pool sets to run successfully.
 

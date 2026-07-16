@@ -42,6 +42,21 @@ function Assert-NotContains {
     }
 }
 
+function Assert-StrictJson {
+    param(
+        [Parameter(Mandatory=$true)][string]$Text,
+        [Parameter(Mandatory=$true)][string]$Path
+    )
+
+    try {
+        $jsonDocument = [System.Text.Json.JsonDocument]::Parse($Text)
+        $jsonDocument.Dispose()
+    }
+    catch {
+        throw "Strict JSON parsing failed for ${Path}: $($_.Exception.Message)"
+    }
+}
+
 $tokens = $null
 $parseErrors = $null
 $null = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
@@ -68,8 +83,10 @@ Assert-Contains -Haystack $scriptText -Needle 'function Test-AnfFlexibleServiceL
 Assert-Contains -Haystack $scriptText -Needle 'Flexible Service Level is not supported by this script' -Message 'Expected FSL pools to be rejected with a clear warning/error.'
 Assert-Contains -Haystack $scriptText -Needle '24-hour cooldown' -Message 'Expected FSL cooldown rationale to be documented in script comments or output.'
 Assert-Contains -Haystack $scriptText -Needle 'Auto QoS only' -Message 'Expected script to document that the pool-move model is Auto QoS only.'
-Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekendPoolName' -Message 'Expected editable weekend pool name setting.'
-Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekdayPoolName' -Message 'Expected editable weekday pool name setting.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekendPoolName' -Message 'Expected advanced optional weekend pool name override.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekdayPoolName' -Message 'Expected advanced optional weekday pool name override.'
+Assert-Contains -Haystack $scriptText -Needle '$initialPoolName-weekday' -Message 'Expected weekday pool name to default from the initial pool name.'
+Assert-Contains -Haystack $scriptText -Needle '$initialPoolName-weekend' -Message 'Expected weekend pool name to default from the initial pool name.'
 Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekendServiceLevel' -Message 'Expected editable weekend service level setting.'
 Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekdayServiceLevel' -Message 'Expected editable weekday service level setting.'
 Assert-Contains -Haystack $scriptText -Needle 'ANF_WeekendStartDay' -Message 'Expected editable weekend start day setting.'
@@ -96,13 +113,20 @@ Assert-Contains -Haystack $readmeText -Needle '24-hour cooldown' -Message 'Expec
 Assert-Contains -Haystack $readmeText -Needle 'Auto QoS only' -Message 'Expected README to document Auto QoS-only behavior.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityPoolResourceId` | required |' -Message 'Expected README settings table to document target Resource ID.'
 Assert-Contains -Haystack $readmeText -Needle '| `ANF_TestMode` | `Yes` |' -Message 'Expected README settings table to document test mode default.'
+Assert-Contains -Haystack $readmeText -Needle 'Weekday and weekend pool names are derived automatically' -Message 'Expected README to document automatic target pool naming.'
+Assert-NotContains -Haystack $readmeText -Needle '| `ANF_WeekdayPoolName` |' -Message 'Expected README not to list weekday pool name as a deployment-facing setting.'
+Assert-NotContains -Haystack $readmeText -Needle '| `ANF_WeekendPoolName` |' -Message 'Expected README not to list weekend pool name as a deployment-facing setting.'
 Assert-Contains -Haystack $readmeText -Needle 'Each configured pool set is processed independently' -Message 'Expected README to document no cross-pool calculations.'
 
 Assert-Contains -Haystack $deployText -Needle '"runbookType": "PowerShell72"' -Message 'Expected commercial deploy template to create the runbook on PowerShell 7.2.'
 Assert-Contains -Haystack $deployText -Needle '"capacityPoolResourceId"' -Message 'Expected commercial deploy template to ask for initial capacity pool Resource ID.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_CapacityPoolResourceId"' -Message 'Expected commercial deploy template to create target Resource ID Automation variable.'
-Assert-Contains -Haystack $deployText -Needle '"ANF_WeekendPoolName"' -Message 'Expected commercial deploy template to create weekend pool name Automation variable.'
-Assert-Contains -Haystack $deployText -Needle '"ANF_WeekdayPoolName"' -Message 'Expected commercial deploy template to create weekday pool name Automation variable.'
+Assert-NotContains -Haystack $deployText -Needle '"ANF_WeekendPoolName"' -Message 'Expected commercial deploy template not to create weekend pool name Automation variable.'
+Assert-NotContains -Haystack $deployText -Needle '"ANF_WeekdayPoolName"' -Message 'Expected commercial deploy template not to create weekday pool name Automation variable.'
+Assert-NotContains -Haystack $deployText -Needle '"weekendPoolName"' -Message 'Expected commercial deploy template not to prompt for weekend pool name.'
+Assert-NotContains -Haystack $deployText -Needle '"weekdayPoolName"' -Message 'Expected commercial deploy template not to prompt for weekday pool name.'
+Assert-NotContains -Haystack $deployGovText -Needle '"weekendPoolName"' -Message 'Expected Azure Gov deploy wrapper not to prompt for weekend pool name.'
+Assert-NotContains -Haystack $deployGovText -Needle '"weekdayPoolName"' -Message 'Expected Azure Gov deploy wrapper not to prompt for weekday pool name.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_WeekendServiceLevel"' -Message 'Expected commercial deploy template to create weekend service level Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_WeekdayServiceLevel"' -Message 'Expected commercial deploy template to create weekday service level Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_TestMode"' -Message 'Expected commercial deploy template to create test mode Automation variable.'
@@ -114,9 +138,11 @@ Assert-Contains -Haystack $deployGovBadgeText -Needle 'fill="#0078D4"' -Message 
 Assert-NotContains -Haystack $deployText -Needle '"Az.NetAppFiles"' -Message 'Expected deploy template not to import Az.NetAppFiles.'
 
 if ($deployText) {
+    Assert-StrictJson -Text $deployText -Path $deployPath
     $null = $deployText | ConvertFrom-Json -ErrorAction Stop
 }
 if ($deployGovText) {
+    Assert-StrictJson -Text $deployGovText -Path $deployGovPath
     $null = $deployGovText | ConvertFrom-Json -ErrorAction Stop
 }
 

@@ -42,8 +42,6 @@ Azure Automation Account Setup Requirements:
 
    Weekend scaling settings:
    - ANF_TestMode: "Yes" for preview, "No" for live changes (string, default: "Yes")
-   - ANF_WeekdayPoolName: Weekday target pool name. Blank defaults to "<initial-pool>-weekday" (string)
-   - ANF_WeekendPoolName: Weekend target pool name. Blank defaults to "<initial-pool>-weekend" (string)
    - ANF_WeekdayServiceLevel: Weekday service level: Standard, Premium, or Ultra (string, default: "Ultra")
    - ANF_WeekendServiceLevel: Weekend service level: Standard, Premium, or Ultra (string, default: "Standard")
    - ANF_WeekendStartDay: Weekend window start day (string, default: "Friday")
@@ -52,6 +50,10 @@ Azure Automation Account Setup Requirements:
    - ANF_WeekendEndDay: Weekend window end day (string, default: "Monday")
    - ANF_WeekendEndTime: Weekend window end time in HH:mm (string, default: "06:00")
    - ANF_TimeZone: Time zone ID for schedule decisions (string, default: "Central Standard Time")
+
+   Advanced optional overrides, not exposed by the deployment workflow:
+   - ANF_WeekdayPoolName: Weekday target pool name. Blank defaults to "<initial-pool>-weekday" (string)
+   - ANF_WeekendPoolName: Weekend target pool name. Blank defaults to "<initial-pool>-weekend" (string)
 #>
 
 $runningInAutomation = $false

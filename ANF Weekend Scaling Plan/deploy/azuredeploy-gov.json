@@ -26,20 +26,6 @@
         "description": "Yes = preview only. No = create target pool, move volumes, and remove the previous source pool."
       }
     },
-    "weekdayPoolName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Weekday target pool name. Leave blank to use <initial-pool>-weekday."
-      }
-    },
-    "weekendPoolName": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Weekend target pool name. Leave blank to use <initial-pool>-weekend."
-      }
-    },
     "weekdayServiceLevel": {
       "type": "string",
       "defaultValue": "Ultra",
@@ -143,9 +129,7 @@
   "variables": {
     "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/weekend-scaling-modernization/ANF%20Weekend%20Scaling%20Plan/deploy/azuredeploy.json",
     "editableTestModeVariable": "ANF_TestMode",
-    "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId",
-    "editableWeekdayPoolNameVariable": "ANF_WeekdayPoolName",
-    "editableWeekendPoolNameVariable": "ANF_WeekendPoolName"
+    "editableCapacityPoolResourceIdVariable": "ANF_CapacityPoolResourceId"
   },
   "resources": [
     {
@@ -167,12 +151,6 @@
           },
           "testMode": {
             "value": "[parameters('testMode')]"
-          },
-          "weekdayPoolName": {
-            "value": "[parameters('weekdayPoolName')]"
-          },
-          "weekendPoolName": {
-            "value": "[parameters('weekendPoolName')]"
           },
           "weekdayServiceLevel": {
             "value": "[parameters('weekdayServiceLevel')]"
@@ -216,14 +194,6 @@
     "capacityPoolResourceIdVariable": {
       "type": "string",
       "value": "[variables('editableCapacityPoolResourceIdVariable')]"
-    },
-    "weekdayPoolNameVariable": {
-      "type": "string",
-      "value": "[variables('editableWeekdayPoolNameVariable')]"
-    },
-    "weekendPoolNameVariable": {
-      "type": "string",
-      "value": "[variables('editableWeekendPoolNameVariable')]"
     }
   }
 }
