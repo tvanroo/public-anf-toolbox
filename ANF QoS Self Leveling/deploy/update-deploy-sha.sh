@@ -26,25 +26,30 @@ template = template_path.read_text(encoding="utf-8")
 template_gov = template_gov_path.read_text(encoding="utf-8")
 
 readme_updated = re.sub(
-    r"https%3A%2F%2Fraw\.githubusercontent\.com%2Ftvanroo%2Fpublic-anf-toolbox%2F[^%]+%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy\.json",
+    r"https%3A%2F%2Fraw\.githubusercontent\.com%2Ftvanroo%2Fpublic-anf-toolbox%2F.*?%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy\.json",
     f"https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F{sha}%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json",
     readme,
 )
 readme_updated = re.sub(
-    r"https%3A%2F%2Fraw\.githubusercontent\.com%2Ftvanroo%2Fpublic-anf-toolbox%2F[^%]+%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov\.json",
+    r"https%3A%2F%2Fraw\.githubusercontent\.com%2Ftvanroo%2Fpublic-anf-toolbox%2F.*?%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov\.json",
     f"https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F{sha}%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov.json",
     readme_updated,
 )
 
 template_updated = re.sub(
-    r"https://raw\.githubusercontent\.com/tvanroo/public-anf-toolbox/[^/]+/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL\.ps1",
-    f"https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/{sha}/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1",
+    r"https://raw\.githubusercontent\.com/tvanroo/public-anf-toolbox/[^/]+/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling\.ps1",
+    f"https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/{sha}/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1",
     template,
 )
 template_gov_updated = re.sub(
-    r"https://raw\.githubusercontent\.com/tvanroo/public-anf-toolbox/[^/]+/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL\.ps1",
-    f"https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/{sha}/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1",
+    r"https://raw\.githubusercontent\.com/tvanroo/public-anf-toolbox/[^/]+/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling\.ps1",
+    f"https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/{sha}/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1",
     template_gov,
+)
+template_gov_updated = re.sub(
+    r"https://raw\.githubusercontent\.com/tvanroo/public-anf-toolbox/.*/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy\.json",
+    f"https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/{sha}/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json",
+    template_gov_updated,
 )
 
 readme_path.write_text(readme_updated, encoding="utf-8")

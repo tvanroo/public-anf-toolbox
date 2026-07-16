@@ -2,18 +2,17 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "targetPoolIncludeTagKey": {
+    "automationAccountName": {
       "type": "string",
-      "defaultValue": "AnfQosSelfLevelingTarget",
+      "defaultValue": "[concat('ANF-QoS-SelfLeveling-', take(uniqueString(resourceGroup().id, deployment().name), 6))]",
       "metadata": {
-        "description": "Tag key used on capacity pools to include them in automation."
+        "description": "Automation Account name. Change this if the name already exists in the deployment resource group, or clear it to generate a unique name."
       }
     },
-    "targetPoolIncludeTagValue": {
+    "capacityPoolResourceId": {
       "type": "string",
-      "defaultValue": "true",
       "metadata": {
-        "description": "Tag value used with targetPoolIncludeTagKey to include capacity pools in automation."
+        "description": "Full Resource ID of the initial Azure NetApp Files capacity pool. After deployment, edit ANF_CapacityPoolResourceId to add more pool IDs if needed."
       }
     },
     "testMode": {
@@ -24,373 +23,172 @@
         "No"
       ],
       "metadata": {
-        "description": "Test mode. Yes = preview only (no changes in Azure). No = apply live throughput changes."
+        "description": "Yes = preview only. No = apply live QoS and throughput changes."
+      }
+    },
+    "convertToManualMode": {
+      "type": "string",
+      "defaultValue": "Yes",
+      "allowedValues": [
+        "Yes",
+        "No"
+      ],
+      "metadata": {
+        "description": "Yes allows classic Standard/Premium/Ultra Auto QoS pools to be converted to Manual QoS."
+      }
+    },
+    "minimumThroughputPerVolume": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Per-volume throughput floor in MiB/s."
+      }
+    },
+    "throughputLookBackHours": {
+      "type": "int",
+      "defaultValue": 24,
+      "minValue": 1,
+      "metadata": {
+        "description": "Lookback window in hours for throughputLimitReached pressure."
+      }
+    },
+    "decreaseRequiredCleanDays": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "metadata": {
+        "description": "Clean trailing 24-hour windows required before throughput decreases are allowed."
       }
     },
     "levelingAgressionPercent": {
       "type": "int",
       "defaultValue": 10,
       "minValue": 1,
-      "maxValue": 100,
       "metadata": {
-        "description": "How aggressively to rebalance each run. This is the maximum percent of movable throughput shifted in one run. Lower = slower/safer, higher = faster/more change."
+        "description": "How aggressively to rebalance each run. This is the percent of movable throughput shifted in one run."
       }
     },
     "throughputLimitMetricAllowance": {
       "type": "int",
-      "defaultValue": 6,
+      "defaultValue": 0,
       "minValue": 0,
       "metadata": {
-        "description": "Allowed throughput-limit incidents per day before a volume is treated as constrained and prioritized for more throughput."
+        "description": "Maximum acceptable throughputLimitReached average before a volume is treated as constrained."
       }
     },
-    "scheduleTimeZone": {
+    "excludeTagKey": {
       "type": "string",
-      "defaultValue": "UTC",
+      "defaultValue": "ExcludeFromAnfQosSelfLeveling",
       "metadata": {
-        "description": "Time zone used by the daily run schedule (for example: UTC)."
+        "description": "Volume tag key used to exclude volumes from self-leveling."
       }
     },
-    "scheduleStartTimeUtc": {
+    "excludeTagValue": {
       "type": "string",
-      "defaultValue": "[dateTimeAdd(utcNow('u'), 'PT15M')]",
+      "defaultValue": "true",
       "metadata": {
-        "description": "UTC start time for the first run. Default is deployment time + 15 minutes."
+        "description": "Volume tag value used with excludeTagKey."
+      }
+    },
+    "scheduleStartDelayMinutes": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "metadata": {
+        "description": "Minutes from deployment time until the first scheduled run starts."
       }
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/555984e/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
     }
   },
   "variables": {
-    "automationAccountName": "[toLower(concat('aa-anf-qos-fsl-', take(uniqueString(resourceGroup().id, deployment().name), 8)))]",
-    "runbookName": "ANF-QoS-SelfLeveling-FSL",
-    "scheduleName": "anf-qos-selfleveling-24h",
-    "jobScheduleName": "[guid(resourceGroup().id, variables('automationAccountName'), variables('runbookName'), variables('scheduleName'))]",
-    "standardTags": {
-      "managed-by": "public-anf-toolbox",
-      "solution": "anf-qos-self-leveling-fsl",
-      "repository": "https://github.com/tvanroo/public-anf-toolbox",
-      "documentation": "https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Self%20Leveling",
-      "script": "ANF-QoS-Autoscale-SelfLeveling-FSL.ps1"
-    }
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json"
   },
   "resources": [
     {
-      "type": "Microsoft.Automation/automationAccounts",
-      "apiVersion": "2023-11-01",
-      "name": "[variables('automationAccountName')]",
-      "location": "[resourceGroup().location]",
-      "identity": {
-        "type": "SystemAssigned"
-      },
-      "tags": "[variables('standardTags')]",
-      "properties": {
-        "sku": {
-          "name": "Basic"
-        },
-        "publicNetworkAccess": true
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_SubscriptionId')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Target subscription for ANF discovery.",
-        "value": "[concat('\"', subscription().subscriptionId, '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_TargetPoolIncludeTagKey')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Capacity pool include tag key.",
-        "value": "[concat('\"', parameters('targetPoolIncludeTagKey'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_TargetPoolIncludeTagValue')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Capacity pool include tag value.",
-        "value": "[concat('\"', parameters('targetPoolIncludeTagValue'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_TestMode')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Runbook mode (Yes=preview, No=live).",
-        "value": "[concat('\"', parameters('testMode'), '\"')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_LevelingAgressionPercent')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Leveling aggression percent.",
-        "value": "[string(parameters('levelingAgressionPercent'))]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_ThroughputLimitMetricAllowance')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Throughput limit metric allowance.",
-        "value": "[string(parameters('throughputLimitMetricAllowance'))]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_IncreaseLookBackHours')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Increase signal look-back period in hours for throughputLimitReached metrics.",
-        "value": "24"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRequiredCleanDays')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Required number of clean 24-hour windows before throughput decreases are allowed.",
-        "value": "3"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumThroughputPerVolume')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Minimum throughput floor per managed volume (MiB/s).",
-        "value": "1"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumPoolThroughputMibps')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Minimum flexible service level pool throughput floor (MiB/s).",
-        "value": "128"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRetrySleepSeconds')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Retry interval in seconds for blocked decrease updates.",
-        "value": "300"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_DecreaseRetryMaxWaitSeconds')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Maximum cumulative retry wait in seconds for decrease updates.",
-        "value": "3600"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_ExcludeTagKey')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Volume tag key used to exclude volumes from self-leveling.",
-        "value": "\"ExcludeFromAnfQosSelfLeveling\""
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/variables",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/ANF_ExcludeTagValue')]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "isEncrypted": false,
-        "description": "Volume tag value used with ANF_ExcludeTagKey to exclude volumes.",
-        "value": "\"true\""
-      }
-    },
-    {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2022-09-01",
-      "name": "[concat('sub-rbac-', variables('automationAccountName'))]",
-      "location": "[resourceGroup().location]",
-      "subscriptionId": "[subscription().subscriptionId]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
+      "name": "anf-qos-selfleveling-gov",
       "properties": {
         "mode": "Incremental",
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "parameters": {
-            "principalId": {
-              "type": "string"
-            },
-            "automationAccountName": {
-              "type": "string"
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "name": "[guid(parameters('automationAccountName'), 'subscription-contributor')]",
-              "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
-                "principalId": "[parameters('principalId')]",
-                "principalType": "ServicePrincipal"
-              }
-            }
-          ]
+        "templateLink": {
+          "uri": "[variables('sharedTemplateUri')]",
+          "contentVersion": "1.0.0.0"
         },
         "parameters": {
-          "principalId": {
-            "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
-          },
           "automationAccountName": {
-            "value": "[variables('automationAccountName')]"
+            "value": "[parameters('automationAccountName')]"
+          },
+          "capacityPoolResourceId": {
+            "value": "[parameters('capacityPoolResourceId')]"
+          },
+          "testMode": {
+            "value": "[parameters('testMode')]"
+          },
+          "convertToManualMode": {
+            "value": "[parameters('convertToManualMode')]"
+          },
+          "minimumThroughputPerVolume": {
+            "value": "[parameters('minimumThroughputPerVolume')]"
+          },
+          "throughputLookBackHours": {
+            "value": "[parameters('throughputLookBackHours')]"
+          },
+          "decreaseRequiredCleanDays": {
+            "value": "[parameters('decreaseRequiredCleanDays')]"
+          },
+          "levelingAgressionPercent": {
+            "value": "[parameters('levelingAgressionPercent')]"
+          },
+          "throughputLimitMetricAllowance": {
+            "value": "[parameters('throughputLimitMetricAllowance')]"
+          },
+          "excludeTagKey": {
+            "value": "[parameters('excludeTagKey')]"
+          },
+          "excludeTagValue": {
+            "value": "[parameters('excludeTagValue')]"
+          },
+          "scheduleStartDelayMinutes": {
+            "value": "[parameters('scheduleStartDelayMinutes')]"
+          },
+          "runbookScriptUri": {
+            "value": "[parameters('runbookScriptUri')]"
           }
-        }
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/runbooks",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/', variables('runbookName'))]",
-      "location": "[resourceGroup().location]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "tags": "[variables('standardTags')]",
-      "properties": {
-        "description": "ANF QoS Self Leveling FSL runbook. Docs: https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Self%20Leveling",
-        "runbookType": "PowerShell",
-        "logProgress": true,
-        "logVerbose": true,
-        "publishContentLink": {
-          "uri": "[parameters('runbookScriptUri')]",
-          "version": "1.0.0.0"
-        }
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/schedules",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/', variables('scheduleName'))]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
-      ],
-      "properties": {
-        "description": "Daily 24-hour schedule for ANF QoS Self Leveling FSL runbook.",
-        "startTime": "[parameters('scheduleStartTimeUtc')]",
-        "frequency": "Day",
-        "interval": 1,
-        "timeZone": "[parameters('scheduleTimeZone')]"
-      }
-    },
-    {
-      "type": "Microsoft.Automation/automationAccounts/jobSchedules",
-      "apiVersion": "2023-11-01",
-      "name": "[concat(variables('automationAccountName'), '/', variables('jobScheduleName'))]",
-      "dependsOn": [
-        "[resourceId('Microsoft.Automation/automationAccounts/runbooks', variables('automationAccountName'), variables('runbookName'))]",
-        "[resourceId('Microsoft.Automation/automationAccounts/schedules', variables('automationAccountName'), variables('scheduleName'))]"
-      ],
-      "properties": {
-        "schedule": {
-          "name": "[variables('scheduleName')]"
-        },
-        "runbook": {
-          "name": "[variables('runbookName')]"
         }
       }
     }
   ],
   "outputs": {
-    "automationAccountName": {
+    "testModeVariable": {
       "type": "string",
-      "value": "[variables('automationAccountName')]"
+      "value": "ANF_TestMode"
     },
-    "managedIdentityPrincipalId": {
+    "capacityPoolResourceIdVariable": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName')), '2023-11-01', 'Full').identity.principalId]"
+      "value": "ANF_CapacityPoolResourceId"
     },
-    "rbacNextStep": {
+    "levelingAgressionVariable": {
       "type": "string",
-      "value": "Deployment attempts to grant the Automation Account managed identity Contributor at subscription scope. If deployment lacks IAM grant rights, assign Contributor at subscription scope manually."
+      "value": "ANF_LevelingAgressionPercent"
+    },
+    "throughputLimitMetricAllowanceVariable": {
+      "type": "string",
+      "value": "ANF_ThroughputLimitMetricAllowance"
+    },
+    "decreaseRequiredCleanDaysVariable": {
+      "type": "string",
+      "value": "ANF_DecreaseRequiredCleanDays"
+    },
+    "template": {
+      "type": "string",
+      "value": "Azure Government wrapper for ANF QoS Self Leveling deploy template."
     }
   }
 }

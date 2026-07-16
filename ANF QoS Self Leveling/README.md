@@ -1,143 +1,88 @@
-# ⚠️ Warning
+# ANF QoS Self Leveling
 
-**Important Notice:**
+This script reallocates Azure NetApp Files Manual QoS volume throughput based on the `throughputLimitReached` metric. It supports Standard, Premium, Ultra, and Flexible Service Level capacity pools from one script.
 
-This repository is published publicly as a resource for other Azure NetApp Files (ANF) and Azure specialists. However, please be aware of the following:
+![ANF QoS Self Leveling behavior](media/qos-self-leveling-behavior.png)
 
-1. **Unofficial Content:** Nothing in this repository is official, supported, or fully tested. This content is my own personal work and is not warranted in any way.
-2. **No Endorsement:** While I work for NetApp, none of this content is officially from NetApp nor Microsoft, nor is it endorsed or supported by NetApp or Microsoft.
-3. **Use at Your Own Risk:** Please use good judgment, test anything you'll run, and ensure you fully understand any code or scripts you use from this repository.
+## Deploy
 
-By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
+[![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov.json)
 
-# Download Script:
-[Self Leveling](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1)
-    - Reallocates a defined percentage of throughput to volumes based on the historical frequency of Throughput Limit Reached metrics. Result: Volume performance is adjusted to minimize Throughput Limit Reached incidents.
-[Self Leveling - FSL](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling-FSL.ps1)
-    - Flexible Service Level variant with Manual QoS assumptions, guarded decreases, and safer defaults for recurring automation.
+Template files:
 
-## Deploy in Azure (FSL variant)
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F555984e%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
-[![Deploy to Azure Gov](https://aka.ms/deploytoazurebutton)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2F555984e%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy-gov.json)
-
-Template file:
 - `ANF QoS Self Leveling/deploy/azuredeploy.json`
-- `ANF QoS Self Leveling/deploy/azuredeploy-gov.json` (Azure Government portal button target)
-- This button deploys automation for `ANF-QoS-Autoscale-SelfLeveling-FSL.ps1` (Flexible Service Level version).
+- `ANF QoS Self Leveling/deploy/azuredeploy-gov.json`
 
-Post-deploy requirement:
-- Deployment now attempts to grant the Automation Account managed identity Contributor at subscription scope automatically.
-- If deployment IAM rights are insufficient for role assignment, grant Contributor at subscription scope manually before running live mode.
-- Deployment uses Azure Automation runtime Az modules (no explicit PSG module pinning/import in the template).
-- If you manually import custom Az modules, validate compatibility in a test Automation Account first.
+The deployment creates an Azure Automation Account, imports the PowerShell 7.2 runbook, installs `Az.Accounts`, creates the runbook schedule, and grants the managed identity Azure NetApp Files Administrator plus Monitoring Reader on the ANF account that owns the initial target pool.
 
-## GA Safety Notes
+If you add capacity pools from other ANF accounts after deployment, grant the same managed identity permissions on each additional ANF account.
 
-- The script defaults to `$testMode = "Yes"`, so it reports planned throughput allocation without updating volumes.
-- Live updates require `$testMode = "No"`.
-- Auto QoS to Manual conversion is previewed in test mode and only executed when both `$ConvertToManualMode = "Yes"` and `$testMode = "No"`.
-- Re-runs compare the current volume throughput values and only apply changes when the calculated target differs.
+## Behavior
 
-## FSL variant behavior (ANF-QoS-Autoscale-SelfLeveling-FSL.ps1)
+Each capacity pool is processed independently. Service level, QoS mode, current throughput, volume metrics, and all allocation math are evaluated per pool with no cross-pool assumptions.
 
-- Expects a Manual QoS pool and exits if QoS is not Manual.
-- Enforces floor checks:
-  - Minimum pool throughput: `128 MiB/s`
-  - Minimum per-volume throughput: `1 MiB/s`
-- Uses `throughputLimitReached` history to rebalance throughput.
-- Allows increases immediately when metrics indicate pressure.
-- In live mode, increases pool throughput first (if needed), applies volume updates, then decreases pool throughput last (if needed).
-- Throughput-only behavior: no volume capacity resize and no pool size/capacity resize operations are performed.
-- Supports tag-based pool targeting across multiple ANF accounts/pools in the subscription.
-  - Default include tag: `AnfQosSelfLevelingTarget=true`
-- Allows decreases only when:
-  - The last 3 rolling 24-hour windows are clean (aligned to script runtime), and
-  - Any decrease update gate is satisfied by retry logic.
-- For decrease updates that fail near timing boundaries, retries every 5 minutes for up to 1 hour before skipping that decrease.
-- Supports tag-based volume exclusion. Volumes tagged with `ExcludeFromAnfQosSelfLeveling=true` are ignored by automation and remain unchanged.
+Classic service levels use fixed pool throughput rates:
 
-## Quick safe start (recommended)
+- Standard: 16 MiB/s per TiB
+- Premium: 64 MiB/s per TiB
+- Ultra: 128 MiB/s per TiB
 
-1. Set `testMode = "Yes"` and run once.
-2. Review output table and verify proposed increases/decreases match expectations for your pool.
-3. Keep defaults for first live run (`levelingAgressionPercent=10`, `throughputLimitMetricAllowance=6`), then set `testMode = "No"`.
-4. Re-check next 1-2 runs and adjust aggressiveness only if needed.
-5. Tag each capacity pool you want automated with `AnfQosSelfLevelingTarget=true`.
-6. If a volume should be left untouched, add exclusion tag `ExcludeFromAnfQosSelfLeveling=true`.
+The planner reserves throughput currently assigned to excluded volumes before calculating managed-volume targets. Excluded volumes are never changed by this runbook.
 
-## Deploy wizard inputs (what you set during Deploy to Azure)
+Managed volumes consume the full remaining throughput budget for the pool. If metric pressure only requires a small amount of throughput, the unused budget is still redistributed across managed volumes instead of being left idle.
 
-### `targetPoolIncludeTagKey` (default `AnfQosSelfLevelingTarget`)
-- Capacity-pool include tag key.
-- Only pools with this key/value pair are processed.
+If planned managed-volume throughput plus excluded-volume reservations exceeds the current pool budget, the runbook expands the pool budget before increasing volume throughput. Standard, Premium, and Ultra pools are expanded by increasing capacity to the next whole TiB required by the service-level throughput rate. FSL uses the current manual pool throughput as the starting budget and is expanded by increasing purchased pool throughput when needed. FSL pool throughput decreases are attempted after volume decreases, but Azure NetApp Files can enforce a 24-hour cooldown after an FSL throughput increase, so a decrease may be deferred even when volume-level changes complete.
 
-### `targetPoolIncludeTagValue` (default `true`)
-- Capacity-pool include tag value (case-insensitive).
+Auto QoS classic pools can be converted to Manual QoS when `ANF_ConvertToManualMode` is `Yes`. In test mode, conversion and throughput changes are only reported.
 
-### `testMode` (default `Yes`)
-- `Yes`: dry run only.
-- `No`: apply live throughput updates.
+## Post-Deployment Variables
 
-### `levelingAgressionPercent` (default `10`)
-- Max share of movable throughput shifted each run.
-- Lower = slower/steadier; higher = faster/more churn.
+Edit variables in **Automation Account > Shared Resources > Variables**.
 
-### `throughputLimitMetricAllowance` (default `6`)
-- Equilibrium threshold.
-- Above threshold: increase candidate.
-- At/below threshold: decrease candidate (subject to decrease clean-window gate).
+| Variable | Default | Impact |
+| --- | --- | --- |
+| `ANF_CapacityPoolResourceId` | required | One or more full capacity pool Resource IDs. Separate multiple IDs with new lines, semicolons, or commas. |
+| `ANF_TestMode` | `Yes` | `Yes` previews work only. Change to `No` before expecting live throughput or QoS changes. |
+| `ANF_TenantId` | tenant from deployment | Tenant used for managed identity or device authentication context. |
+| `ANF_ConvertToManualMode` | `Yes` | Allows classic Standard/Premium/Ultra Auto QoS pools to be converted to Manual QoS. FSL already requires Manual QoS. |
+| `ANF_MinimumThroughputPerVolume` | `1` | Per-volume throughput floor in MiB/s. |
+| `ANF_ThroughputLookBackHours` | `24` | Lookback window for `throughputLimitReached` pressure. |
+| `ANF_DecreaseRequiredCleanDays` | `3` | Number of clean trailing 24-hour windows required before a volume throughput decrease is allowed. |
+| `ANF_LevelingAgressionPercent` | `10` | Percent of movable throughput shifted per run. The spelling preserves the original script variable name. |
+| `ANF_ThroughputLimitMetricAllowance` | `0` | Maximum acceptable average `throughputLimitReached` value before a volume is considered constrained. |
+| `ANF_ExcludeTagKey` | `ExcludeFromAnfQosSelfLeveling` | Tag key used to exclude volumes. |
+| `ANF_ExcludeTagValue` | `true` | Tag value used with `ANF_ExcludeTagKey`. |
 
-### `scheduleTimeZone` / `scheduleStartTimeUtc`
-- Controls schedule timing only.
+## Multiple Pools
 
-## Automation Shared Variables (post-deploy tuning in portal)
+`ANF_CapacityPoolResourceId` accepts multiple pool IDs without changing the deployment interface:
 
-Edit these in **Automation Account → Shared Resources → Variables**.
+```text
+/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool-a>
+/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool-b>
+```
 
-### Targeting and run mode
-- `ANF_SubscriptionId`: subscription scope for discovery.
-- `ANF_TargetPoolIncludeTagKey` / `ANF_TargetPoolIncludeTagValue`: pool targeting tags.
-- `ANF_TestMode`: `Yes` (preview) or `No` (live).
+Commas and semicolons are also accepted. Shared tuning variables are reused across all configured pools; deploy a separate Automation Account if different pools need different thresholds or aggressiveness.
 
-### Increase/decrease behavior
-- `ANF_IncreaseLookBackHours` (default `24`): increase-signal lookback window.
-- `ANF_DecreaseRequiredCleanDays` (default `3`): number of clean 24-hour windows required before decreases are allowed.
-- `ANF_ThroughputLimitMetricAllowance` (default `6`): over/under threshold target.
-- `ANF_LevelingAgressionPercent` (default `10`): per-run movement aggressiveness.
+## Manual Run
 
-### Throughput safety floors
-- `ANF_MinimumThroughputPerVolume` (default `1`)
-- `ANF_MinimumPoolThroughputMibps` (default `128`)
+From Cloud Shell or any PowerShell session with `Az.Accounts`:
 
-### Decrease retry behavior
-- `ANF_DecreaseRetrySleepSeconds` (default `300`)
-- `ANF_DecreaseRetryMaxWaitSeconds` (default `3600`)
+```powershell
+$env:ANF_TenantId = "<tenant-id>"
+$env:ANF_CapacityPoolResourceId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
+$env:ANF_TestMode = "Yes"
+pwsh ./ANF-QoS-Autoscale-SelfLeveling.ps1
+```
 
-### Exclusions
-- `ANF_ExcludeTagKey` (default `ExcludeFromAnfQosSelfLeveling`)
-- `ANF_ExcludeTagValue` (default `true`)
+Review the table output first. Set `ANF_TestMode` to `No` only after the planned changes match expectations.
 
-### Optional auth overrides
-- `ANF_TenantId` (usually not needed when Managed Identity context is healthy)
+## Notes
 
-## Runtime decision flow (high level)
-
-1. Discover tagged pools.
-2. For each pool, evaluate volume metrics using `ANF_IncreaseLookBackHours`.
-3. If pressure exists, rebalance toward the allowance threshold.
-4. If no pressure exists, still evaluate eligible per-volume decreases.
-5. Apply decrease gate: only volumes clean for `ANF_DecreaseRequiredCleanDays` can decrease.
-6. Respect min floors and exclusion tags.
-
-## Resource metadata/callback guidance for future admins
-
-Recommended tags on deployed resources:
-- `managed-by=public-anf-toolbox`
-- `solution=anf-qos-self-leveling-fsl`
-- `repository=https://github.com/tvanroo/public-anf-toolbox`
-- `documentation=https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20QoS%20Self%20Leveling`
-- `script=ANF-QoS-Autoscale-SelfLeveling-FSL.ps1`
-- `owner=<team-or-alias>`
-- `support=<email-or-channel>`
-
-Also populate a runbook description with purpose + documentation URL so operators can identify intent directly in Azure Automation.
+- Volumes tagged with `ExcludeFromAnfQosSelfLeveling=true` are ignored and their throughput remains reserved from the managed budget.
+- If all volumes are excluded or a pool has no volumes, that pool is skipped.
+- Unused managed throughput is redistributed to managed volumes proportionally, with metric pressure taking precedence when `throughputLimitReached` is present.
+- If volume throughput targets exceed available pool throughput, the script increases classic pool capacity or FSL purchased throughput before applying volume increases.
+- Decreases require clean metric windows to avoid reducing throughput immediately after transient pressure clears.
+- The script uses ARM REST calls so it can run in the PowerShell 7.2 Automation runtime without ANF-specific or monitoring cmdlet modules.
