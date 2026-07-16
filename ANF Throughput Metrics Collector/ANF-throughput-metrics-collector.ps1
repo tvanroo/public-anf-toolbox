@@ -30,6 +30,7 @@ Required:
 
 Optional:
 - ANF_TenantId: Azure tenant ID. If omitted, the current Azure context tenant is used.
+- ANF_SubscriptionId: Optional subscription ID or name used for discovery. If omitted and multiple active subscriptions are visible, local runs prompt for one.
 - ANF_CapacityPoolResourceId: Optional explicit capacity pool Resource IDs separated by new lines, semicolons, or commas.
 - ANF_AccountNameFilter: Optional account name text filter. Multiple values can be separated by new lines, semicolons, or commas.
 - ANF_PoolNameFilter: Optional capacity pool name text filter. Multiple values can be separated by new lines, semicolons, or commas.
@@ -194,7 +195,15 @@ function Get-AnfObjectProperty {
             return $InputObject[$propertyName]
         }
 
-        $property = $InputObject.PSObject.Properties | Where-Object { $_.Name -eq $propertyName } | Select-Object -First 1
+        if ($InputObject -is [System.Collections.IDictionary]) {
+            foreach ($key in $InputObject.Keys) {
+                if ("$key".Equals($propertyName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $InputObject[$key]
+                }
+            }
+        }
+
+        $property = $InputObject.PSObject.Properties | Where-Object { $_.Name.Equals($propertyName, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
         if ($property) {
             return $property.Value
         }
@@ -204,6 +213,8 @@ function Get-AnfObjectProperty {
 }
 
 $tenantId = Get-AnfSetting -Name "ANF_TenantId" -Default ""
+$subscriptionSelectionSetting = Get-AnfSetting -Name "ANF_SubscriptionId" -Default ""
+$subscriptionSelections = @(Split-AnfSettingList -Value $subscriptionSelectionSetting)
 $capacityPoolResourceIdSetting = Get-AnfSetting -Name "ANF_CapacityPoolResourceId" -Default ""
 $anfTargets = @()
 if ($capacityPoolResourceIdSetting) {
@@ -242,6 +253,7 @@ if ($anfTargets.Count -gt 0) {
 Write-Output "Account Filter: $(if ($accountNameFilters.Count -gt 0) { $accountNameFilters -join ', ' } else { 'None' })"
 Write-Output "Pool Filter: $(if ($poolNameFilters.Count -gt 0) { $poolNameFilters -join ', ' } else { 'None' })"
 Write-Output "Volume Filter: $(if ($volumeNameFilters.Count -gt 0) { $volumeNameFilters -join ', ' } else { 'All volumes in each matched pool' })"
+Write-Output "Subscription Selection: $(if ($subscriptionSelections.Count -gt 0) { $subscriptionSelections -join ', ' } elseif ($anfTargets.Count -gt 0) { 'Derived from explicit capacity pool Resource ID(s)' } else { 'Prompt when multiple active subscriptions are visible' })"
 Write-Output "Metrics: $metricNames"
 Write-Output "Lookback: $lookBackDays day(s)"
 Write-Output "Interval: $timeGrainMinutes minute(s)"
@@ -324,9 +336,12 @@ function Get-AnfArmListValues {
     $values = @()
     $response = Invoke-AnfArmJson -Method "GET" -ResourceId $ResourceId -ApiVersion $ApiVersion
     while ($response) {
-        if ($response.value) {
-            $values += @($response.value)
-        } elseif ($response.id) {
+        $valueProperty = $response.PSObject.Properties | Where-Object { $_.Name.Equals("value", [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+        if ($valueProperty) {
+            if ($null -ne $valueProperty.Value) {
+                $values += @($valueProperty.Value)
+            }
+        } elseif (Get-AnfObjectProperty -InputObject $response -PropertyNames @('id', 'Id')) {
             $values += $response
         }
 
@@ -378,6 +393,23 @@ function Resolve-AnfNetAppAccountResourceId {
     }
 }
 
+function Test-AnfCapacityPoolTarget {
+    param([Parameter()][object]$Target)
+
+    if ($null -eq $Target) {
+        return $false
+    }
+
+    foreach ($propertyName in @('CapacityPoolResourceId', 'SubscriptionId', 'ResourceGroupName', 'AccountName', 'PoolName')) {
+        $value = Get-AnfObjectProperty -InputObject $Target -PropertyNames @($propertyName)
+        if ([string]::IsNullOrWhiteSpace("$value")) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Select-AnfCapacityPoolTargets {
     param(
         [Parameter(Mandatory=$true)][object[]]$Targets,
@@ -386,21 +418,110 @@ function Select-AnfCapacityPoolTargets {
     )
 
     return @($Targets | Where-Object {
+        (Test-AnfCapacityPoolTarget -Target $_) -and
         (Test-AnfTextFilter -Value $_.AccountName -Filters $AccountFilters) -and
         (Test-AnfTextFilter -Value $_.PoolName -Filters $PoolFilters)
     })
 }
 
+function Get-AnfSubscriptionIdFromObject {
+    param([Parameter(Mandatory=$true)][object]$Subscription)
+
+    $subscriptionId = Get-AnfObjectProperty -InputObject $Subscription -PropertyNames @('Id', 'SubscriptionId')
+    return "$subscriptionId"
+}
+
+function Get-AnfSubscriptionNameFromObject {
+    param([Parameter(Mandatory=$true)][object]$Subscription)
+
+    $subscriptionName = Get-AnfObjectProperty -InputObject $Subscription -PropertyNames @('Name', 'SubscriptionName')
+    if ([string]::IsNullOrWhiteSpace("$subscriptionName")) {
+        return (Get-AnfSubscriptionIdFromObject -Subscription $Subscription)
+    }
+
+    return "$subscriptionName"
+}
+
+function Select-AnfDiscoverySubscriptions {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Subscriptions,
+        [Parameter()][string[]]$SubscriptionSelections = @()
+    )
+
+    if ($SubscriptionSelections.Count -gt 0) {
+        $matchedSubscriptions = @($Subscriptions | Where-Object {
+            $subscriptionId = Get-AnfSubscriptionIdFromObject -Subscription $_
+            $subscriptionName = Get-AnfSubscriptionNameFromObject -Subscription $_
+            $isMatch = $false
+            foreach ($selection in $SubscriptionSelections) {
+                if ($subscriptionId.Equals($selection, [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $subscriptionName.Equals($selection, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isMatch = $true
+                    break
+                }
+            }
+            $isMatch
+        })
+
+        if ($matchedSubscriptions.Count -eq 0) {
+            throw "ANF_SubscriptionId did not match any visible active subscription by ID or name: $($SubscriptionSelections -join ', ')"
+        }
+
+        return @($matchedSubscriptions)
+    }
+
+    if ($Subscriptions.Count -le 1) {
+        return @($Subscriptions)
+    }
+
+    if ($runningInAutomation) {
+        $context = Get-AzContext -ErrorAction Stop
+        $contextSubscriptionId = if ($context.Subscription -and $context.Subscription.Id) { "$($context.Subscription.Id)" } else { "" }
+        if (-not $contextSubscriptionId) {
+            throw "Multiple active subscriptions are visible and no current subscription context is available. Set ANF_SubscriptionId."
+        }
+
+        $currentSubscription = @($Subscriptions | Where-Object { (Get-AnfSubscriptionIdFromObject -Subscription $_).Equals($contextSubscriptionId, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)
+        if ($currentSubscription.Count -eq 0) {
+            throw "Current subscription '$contextSubscriptionId' was not found in the visible subscription list. Set ANF_SubscriptionId."
+        }
+
+        Write-Warning "Multiple active subscriptions are visible. Azure Automation cannot prompt, so discovery is limited to current subscription '$contextSubscriptionId'."
+        return @($currentSubscription)
+    }
+
+    Write-Output ""
+    Write-Output "Multiple active Azure subscriptions are visible. Select one for ANF discovery:"
+    for ($index = 0; $index -lt $Subscriptions.Count; $index++) {
+        $subscription = $Subscriptions[$index]
+        Write-Output ("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription))
+    }
+
+    while ($true) {
+        $selection = Read-Host "Enter subscription number"
+        $selectionNumber = 0
+        if ([int]::TryParse($selection, [ref]$selectionNumber) -and $selectionNumber -ge 1 -and $selectionNumber -le $Subscriptions.Count) {
+            return @($Subscriptions[$selectionNumber - 1])
+        }
+
+        Write-Warning "Invalid selection '$selection'. Enter a number from 1 to $($Subscriptions.Count)."
+    }
+}
+
 function Get-AnfDiscoverySubscriptions {
+    param([Parameter()][string[]]$SubscriptionSelections = @())
+
+    $subscriptions = @()
     try {
         $subscriptions = @(Get-AzSubscription -ErrorAction Stop | Where-Object {
             -not $_.State -or "$($_.State)".Equals("Enabled", [System.StringComparison]::OrdinalIgnoreCase)
         })
-        if ($subscriptions.Count -gt 0) {
-            return @($subscriptions)
-        }
     } catch {
         Write-Warning "Unable to enumerate Azure subscriptions; falling back to the current context subscription. $($_.Exception.Message)"
+    }
+
+    if ($subscriptions.Count -gt 0) {
+        return @(Select-AnfDiscoverySubscriptions -Subscriptions $subscriptions -SubscriptionSelections $SubscriptionSelections)
     }
 
     $context = Get-AzContext -ErrorAction Stop
@@ -417,18 +538,19 @@ function Get-AnfDiscoverySubscriptions {
 
 function Get-AnfDiscoveredCapacityPoolTargets {
     param(
+        [Parameter()][string[]]$SubscriptionSelections = @(),
         [Parameter()][string[]]$AccountFilters = @(),
         [Parameter()][string[]]$PoolFilters = @()
     )
 
     $targets = @()
     $seenResourceIds = @{}
-    $subscriptions = @(Get-AnfDiscoverySubscriptions)
-    Write-Output "Discovering ANF capacity pools across $($subscriptions.Count) visible subscription(s)..."
+    $subscriptions = @(Get-AnfDiscoverySubscriptions -SubscriptionSelections $SubscriptionSelections)
+    Write-Output "Discovering ANF capacity pools in $($subscriptions.Count) selected subscription(s)..."
 
     foreach ($subscription in $subscriptions) {
-        $subscriptionId = if ($subscription.Id) { "$($subscription.Id)" } else { "$($subscription.SubscriptionId)" }
-        $subscriptionName = if ($subscription.Name) { "$($subscription.Name)" } else { $subscriptionId }
+        $subscriptionId = Get-AnfSubscriptionIdFromObject -Subscription $subscription
+        $subscriptionName = Get-AnfSubscriptionNameFromObject -Subscription $subscription
         if (-not $subscriptionId) {
             Write-Warning "Skipping subscription entry with no subscription ID."
             continue
@@ -446,7 +568,13 @@ function Get-AnfDiscoveredCapacityPoolTargets {
 
         foreach ($account in $accounts) {
             try {
-                $accountTarget = Resolve-AnfNetAppAccountResourceId -AccountResourceId $account.id
+                $accountId = Get-AnfObjectProperty -InputObject $account -PropertyNames @('id', 'Id')
+                if ([string]::IsNullOrWhiteSpace("$accountId")) {
+                    Write-Warning "Skipping ANF account response without a Resource ID."
+                    continue
+                }
+
+                $accountTarget = Resolve-AnfNetAppAccountResourceId -AccountResourceId $accountId
             } catch {
                 Write-Warning $_.Exception.Message
                 continue
@@ -466,9 +594,20 @@ function Get-AnfDiscoveredCapacityPoolTargets {
 
             foreach ($pool in $pools) {
                 try {
-                    $poolTarget = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $pool.id
+                    $poolId = Get-AnfObjectProperty -InputObject $pool -PropertyNames @('id', 'Id')
+                    if ([string]::IsNullOrWhiteSpace("$poolId")) {
+                        Write-Warning "Skipping capacity pool response in ANF account '$($accountTarget.AccountName)' because it did not include a Resource ID."
+                        continue
+                    }
+
+                    $poolTarget = Resolve-AnfCapacityPoolResourceId -CapacityPoolResourceId $poolId
                 } catch {
                     Write-Warning $_.Exception.Message
+                    continue
+                }
+
+                if (-not (Test-AnfCapacityPoolTarget -Target $poolTarget)) {
+                    Write-Warning "Skipping capacity pool response in ANF account '$($accountTarget.AccountName)' because its Resource ID metadata was incomplete."
                     continue
                 }
 
@@ -620,7 +759,7 @@ try {
 if ($anfTargets.Count -gt 0) {
     $anfTargets = @(Select-AnfCapacityPoolTargets -Targets $anfTargets -AccountFilters $accountNameFilters -PoolFilters $poolNameFilters)
 } else {
-    $anfTargets = @(Get-AnfDiscoveredCapacityPoolTargets -AccountFilters $accountNameFilters -PoolFilters $poolNameFilters)
+    $anfTargets = @(Get-AnfDiscoveredCapacityPoolTargets -SubscriptionSelections $subscriptionSelections -AccountFilters $accountNameFilters -PoolFilters $poolNameFilters)
 }
 
 if ($anfTargets.Count -eq 0) {

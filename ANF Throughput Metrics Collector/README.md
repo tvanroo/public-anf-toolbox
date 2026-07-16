@@ -6,7 +6,7 @@ This read-only script exports historical Azure NetApp Files volume throughput me
 
 ## Cloud Shell / PowerShell Quick Start
 
-Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads the script from the current WIP branch, unblocks it when that command is available, and discovers every ANF volume visible to the current Azure context.
+Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads and prepares the script from the current WIP branch, then discovers ANF volumes in the selected subscription.
 
 ```powershell
 $RepoRef = "codex/throughput-metrics-modernization"
@@ -15,6 +15,7 @@ $ScriptPath = Join-Path (Get-Location) $ScriptName
 $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName"
 
 # Optional filters. Leave these commented to collect every discovered ANF volume.
+# $env:ANF_SubscriptionId = "<subscription-id-or-name>"
 # $env:ANF_AccountNameFilter = "prod"
 # $env:ANF_PoolNameFilter = "premium"
 # $env:ANF_VolumeNameFilter = "avd"
@@ -23,12 +24,19 @@ $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$Repo
 # $env:ANF_LookBackDays = "30"
 # $env:ANF_TimeGrainMinutes = "5"
 
+# Download and prep the script.
 $ProgressPreference = "SilentlyContinue"
 Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath
-if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
+$isWindowsPowerShellHost = $true
+$isWindowsVariable = Get-Variable -Name IsWindows -ErrorAction SilentlyContinue
+if ($isWindowsVariable) {
+    $isWindowsPowerShellHost = [bool]$isWindowsVariable.Value
+}
+if ($isWindowsPowerShellHost -and (Get-Command Unblock-File -ErrorAction SilentlyContinue)) {
     Unblock-File -Path $ScriptPath
 }
 
+# Run the downloaded collector.
 & $ScriptPath
 ```
 
@@ -57,6 +65,7 @@ Set these as environment variables before running from Cloud Shell or a local Po
 | Variable | Default | Impact |
 | --- | --- | --- |
 | `ANF_TenantId` | current context | Optional tenant ID used when authentication needs to switch tenants. |
+| `ANF_SubscriptionId` | prompt when multiple exist | Optional subscription ID or exact subscription name used for discovery. If omitted and multiple active subscriptions are visible, local runs prompt for one. |
 | `ANF_CapacityPoolResourceId` | discover visible pools | Optional explicit target override with one or more full capacity pool Resource IDs. Separate multiple IDs with new lines, semicolons, or commas. |
 | `ANF_AccountNameFilter` | all accounts | Optional account name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_PoolNameFilter` | all pools | Optional capacity pool name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
