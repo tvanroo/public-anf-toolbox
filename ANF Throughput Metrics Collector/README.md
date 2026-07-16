@@ -4,6 +4,39 @@ This read-only script exports historical Azure NetApp Files volume throughput me
 
 ![ANF Throughput Metrics Collector behavior](media/throughput-metrics-collector.png)
 
+## Cloud Shell / PowerShell Quick Start
+
+Copy this block, update the `ANF_*` values, and paste it into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads the script from the current WIP branch, unblocks it when that command is available, and runs it with the values you set.
+
+```powershell
+$env:ANF_CapacityPoolResourceId = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.NetApp/netAppAccounts/<account>/capacityPools/<pool>"
+$env:ANF_TenantId = ""
+$env:ANF_VolumeName = ""
+$env:ANF_LookBackDays = "30"
+$env:ANF_TimeGrainMinutes = "5"
+$env:ANF_OutputPath = "./ANF-throughput-metrics.csv"
+$env:ANF_OverwriteOutput = "No"
+
+$RepoRef = "codex/throughput-metrics-modernization"
+$ScriptName = "ANF-throughput-metrics-collector.ps1"
+$ScriptPath = Join-Path (Get-Location) $ScriptName
+$ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName"
+
+$ProgressPreference = "SilentlyContinue"
+Invoke-WebRequest -Uri $ScriptUrl -OutFile $ScriptPath
+if (Get-Command Unblock-File -ErrorAction SilentlyContinue) {
+    Unblock-File -Path $ScriptPath
+}
+
+& $ScriptPath
+```
+
+After the script is downloaded, you can change only the `ANF_*` environment variables and rerun the local copy:
+
+```powershell
+& ./ANF-throughput-metrics-collector.ps1
+```
+
 ## What It Collects
 
 - `ReadThroughput`
