@@ -462,7 +462,7 @@
       ],
       "tags": "[variables('standardTags')]",
       "properties": {
-        "description": "ANF Weekend Scaling Plan runbook for classic Standard, Premium, and Ultra Auto QoS pools.",
+        "description": "ANF Weekend Scaling Plan runbook for classic Standard, Premium, and Ultra Auto or Manual QoS pools.",
         "runbookType": "PowerShell72",
         "logProgress": true,
         "logVerbose": true,

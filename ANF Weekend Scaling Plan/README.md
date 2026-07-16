@@ -18,7 +18,7 @@ This modernization is on the `codex/weekend-scaling-modernization` branch for te
 [![Deploy to Azure Gov](deploy/deploytoazuregov.svg)](https://portal.azure.us/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fcodex%2Fweekend-scaling-modernization%2FANF%2520Weekend%2520Scaling%2520Plan%2Fdeploy%2Fazuredeploy-gov.json)
 
 [ANF Weekend Scaling Plan](./anf-weekend-scaling-plan.ps1)
-    - Moves volumes between weekday and weekend Auto QoS pools to shift classic service levels for scheduled cost savings.
+    - Moves volumes between weekday and weekend pools to shift classic service levels for scheduled cost savings.
 
 The deployment buttons create an Azure Automation Account, import the runbook on the PowerShell 7.2 runtime, create editable `ANF_*` Automation variables, assign the managed identity `Azure NetApp Files Administrator` at the target ANF account scope derived from the initial capacity pool Resource ID, and schedule the runbook hourly. The Automation Account is deployed into the resource group selected in the portal. The RBAC assignment is deployed separately into the ANF account resource group parsed from `capacityPoolResourceId`, so the ANF account does not need to be in the same resource group as the Automation Account.
 
@@ -28,13 +28,15 @@ The runbook only requires `Az.Accounts`. ANF resource reads, pool creation, volu
 
 ## When This Script Applies
 
-This script supports Standard, Premium, and Ultra Auto QoS capacity pools only.
+This script supports Standard, Premium, and Ultra capacity pools with either Auto QoS or Manual QoS.
 
 The script is intended for environments that want to move volumes into a lower-cost classic service level over the weekend and back to a higher-performance classic service level for weekdays. It creates the missing target pool by copying the active pool's size and core pool settings, changes the service level to the configured weekday or weekend value, moves volumes with the ANF `poolChange` REST action, and removes the previous source pool after the move requests complete.
 
 Flexible Service Level is intentionally excluded. FSL throughput is independent from capacity and throughput decreases can be limited by a 24-hour cooldown after an increase, which does not match this pool-move weekend schedule.
 
-Manual QoS is also intentionally excluded. This script is Auto QoS only and does not assign per-volume throughput after a move.
+Auto QoS pools are moved without per-volume throughput changes because ANF allocates the pool throughput automatically.
+
+Manual QoS pools are moved as Manual QoS pools. Before moving into a lower-throughput target, the runbook reduces volume `throughputMibps` where needed so the volumes fit within the target pool's service-level throughput budget. After moving into a higher-throughput target, it increases volume `throughputMibps` where needed. The allocation is a simple mimic-auto model: target pool throughput is calculated from the target service level and pool size, then distributed across the volumes in proportion to their provisioned capacity with a 1 MiB/s per-volume floor.
 
 ## Current Settings
 
@@ -100,9 +102,11 @@ Common examples:
 - If no volumes are found in the initial, weekday, or weekend pools, the runbook exits with a clear error instead of looping.
 - If the active pool already matches the schedule, no pool creation, move, or deletion is attempted.
 - In live mode, the target pool is created first when it does not already exist.
+- Target pools are created with the same QoS type as the active source pool.
 - Volumes are moved with the ANF `poolChange` REST action.
+- Manual QoS volume throughput decreases are applied before the move, and increases are applied after the volumes are visible in the target pool.
 - The previous source pool is removed only after the volume move requests complete.
-- Flexible Service Level pools and Manual QoS pools are rejected before changes are planned.
+- Flexible Service Level pools are rejected before changes are planned.
 
 ## Multiple Pool Sets
 

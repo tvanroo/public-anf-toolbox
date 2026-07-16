@@ -14,13 +14,14 @@ https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-Move Azure NetApp Files volumes between Auto QoS classic-service-level pools for weekend cost savings.
+Move Azure NetApp Files volumes between classic-service-level pools for weekend cost savings.
 This script is designed for Azure Automation and can also be run manually from Cloud Shell or a local PowerShell session.
 
 Important behavior:
-- Supports Standard, Premium, and Ultra capacity pools only.
+- Supports Standard, Premium, and Ultra capacity pools with Auto or Manual QoS.
 - Flexible Service Level is not supported by this script. FSL throughput decreases can be limited by a 24-hour cooldown after an increase, which does not fit this pool-move schedule pattern.
-- Auto QoS only: the script moves volumes between classic Auto QoS pools and does not assign Manual QoS volume throughput.
+- Auto QoS pools are moved without per-volume throughput changes.
+- Manual QoS pools are moved as Manual QoS pools and volume throughput is rebalanced to mimic Auto QoS for the target service level.
 - The initial capacity pool Resource ID identifies the subscription, resource group, ANF account, and initial pool name. After the first move, the initial pool may no longer exist; the Resource ID still identifies the managed pool set.
 - The script creates the missing target pool, moves all volumes with the ANF poolChange REST action, and removes the previous source pool only after the move requests complete.
 - Every configured pool set is processed independently; no pool state or schedule decision crosses target boundaries.
@@ -113,6 +114,10 @@ function Test-AnfYes {
     return "$Value".Trim().Equals("Yes", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+$bytesPerGiB = [math]::Pow(1024, 3)
+$bytesPerTiB = [math]::Pow(1024, 4)
+$manualQosMinimumThroughputPerVolume = 1
+
 function Resolve-AnfCapacityPoolResourceId {
     param([Parameter(Mandatory=$true)][string]$CapacityPoolResourceId)
 
@@ -184,6 +189,59 @@ function Test-AnfFlexibleServiceLevel {
     }
 
     return "$ServiceLevel".Trim().ToLowerInvariant() -eq "flexible"
+}
+
+function Resolve-AnfThroughputMibpsFromProperties {
+    param([object]$Properties)
+
+    if ($null -eq $Properties) {
+        return $null
+    }
+
+    $throughputCandidates = @(
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('totalThroughputMibps', 'TotalThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('throughputMibps', 'ThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('provisionedThroughputMibps', 'ProvisionedThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('actualThroughputMibps', 'ActualThroughputMibps')),
+        (Get-AnfObjectProperty -InputObject $Properties -PropertyNames @('customThroughputMibps', 'CustomThroughputMibps'))
+    )
+
+    foreach ($candidate in $throughputCandidates) {
+        if ($null -ne $candidate -and "$candidate" -ne "") {
+            try {
+                return [double]$candidate
+            } catch {}
+        }
+    }
+
+    return $null
+}
+
+function Convert-ToWholeThroughputMibps {
+    param(
+        [Parameter(Mandatory=$true)][double]$Value,
+        [Parameter()][int]$Minimum = 0
+    )
+
+    $rounded = [int][math]::Round($Value, 0, [System.MidpointRounding]::AwayFromZero)
+    if ($rounded -lt $Minimum) {
+        return $Minimum
+    }
+
+    return $rounded
+}
+
+function Get-AnfClassicManualThroughputPerTiB {
+    param([Parameter(Mandatory=$true)][object]$ServiceLevel)
+
+    switch ("$ServiceLevel".Trim()) {
+        "Standard" { return 16 }
+        "Premium" { return 64 }
+        "Ultra" { return 128 }
+        default {
+            throw "Unsupported service level '$ServiceLevel'. Expected Standard, Premium, or Ultra."
+        }
+    }
 }
 
 function Resolve-AnfClassicServiceLevel {
@@ -314,7 +372,8 @@ Write-Output "Target Pool Label: $targetPoolLabel"
 Write-Output "Target Service Level: $targetServiceLevel"
 Write-Output "Weekday Service Level: $weekdayServiceLevel"
 Write-Output "Weekend Service Level: $weekendServiceLevel"
-Write-Output "Auto QoS only: Manual QoS pools are rejected"
+Write-Output "Manual QoS handling: volume throughput is rebalanced to mimic Auto QoS for the target service level"
+Write-Output "Manual QoS minimum throughput floor: $manualQosMinimumThroughputPerVolume MiB/s per volume"
 
 if (Test-AnfYes -Value $testMode) {
     Write-Output "Running in TEST MODE - no changes will be made"
@@ -544,9 +603,18 @@ function Convert-AnfRestPool {
 function Convert-AnfRestVolume {
     param([Parameter(Mandatory=$true)][object]$Volume)
 
+    $volumeProperties = $Volume.properties
+    $usageThreshold = Get-AnfObjectProperty -InputObject $volumeProperties -PropertyNames @('usageThreshold', 'UsageThreshold')
+    $throughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $volumeProperties
+    if ($null -eq $throughputMibps) {
+        $throughputMibps = 0
+    }
+
     return [PSCustomObject]@{
         Id = $Volume.id
         Name = Get-AnfVolumeShortName -VolumeObject $Volume
+        UsageThreshold = [double]$usageThreshold
+        ThroughputMibps = [double]$throughputMibps
         Raw = $Volume
     }
 }
@@ -639,14 +707,15 @@ function New-AnfPool {
         [Parameter(Mandatory=$true)][string]$ResourceGroupName,
         [Parameter(Mandatory=$true)][string]$AccountName,
         [Parameter(Mandatory=$true)][string]$TargetPoolName,
-        [Parameter(Mandatory=$true)][string]$TargetServiceLevel
+        [Parameter(Mandatory=$true)][string]$TargetServiceLevel,
+        [Parameter(Mandatory=$true)][string]$TargetQosType
     )
 
     $targetPoolResourceId = New-AnfResourceId -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -AccountName $AccountName -PoolName $TargetPoolName
     $properties = @{
         serviceLevel = $TargetServiceLevel
         size = [long]$SourcePool.Size
-        qosType = "Auto"
+        qosType = $TargetQosType
     }
 
     if ($null -ne $SourcePool.CoolAccess -and "$($SourcePool.CoolAccess)" -ne "") {
@@ -680,6 +749,156 @@ function Move-AnfVolumeToPool {
     } | ConvertTo-Json -Depth 3
 
     $null = Invoke-AnfArmJson -Method "POST" -ResourceId "$VolumeResourceId/poolChange" -ApiVersion $anfApiVersion -BodyJson $body -WaitForCompletion
+}
+
+function Update-AnfPoolQosTypeManual {
+    param([Parameter(Mandatory=$true)][string]$PoolResourceId)
+
+    $body = @{
+        properties = @{
+            qosType = "Manual"
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $PoolResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
+function Update-AnfVolumeThroughput {
+    param(
+        [Parameter(Mandatory=$true)][string]$VolumeResourceId,
+        [Parameter(Mandatory=$true)][int]$TargetThroughputMibps
+    )
+
+    $body = @{
+        properties = @{
+            throughputMibps = $TargetThroughputMibps
+        }
+    } | ConvertTo-Json -Depth 3
+
+    $null = Invoke-AnfArmJson -Method "PATCH" -ResourceId $VolumeResourceId -ApiVersion $anfApiVersion -BodyJson $body
+}
+
+function Get-AnfManualPoolThroughputBudgetMibps {
+    param(
+        [Parameter(Mandatory=$true)][double]$PoolSizeBytes,
+        [Parameter(Mandatory=$true)][string]$ServiceLevel
+    )
+
+    $throughputPerTiB = Get-AnfClassicManualThroughputPerTiB -ServiceLevel $ServiceLevel
+    $poolTiB = [double]$PoolSizeBytes / $bytesPerTiB
+    return (Convert-ToWholeThroughputMibps -Value ($poolTiB * $throughputPerTiB) -Minimum 1)
+}
+
+function Get-AnfManualMimicAutoPlan {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Volumes,
+        [Parameter(Mandatory=$true)][double]$PoolSizeBytes,
+        [Parameter(Mandatory=$true)][string]$TargetServiceLevel,
+        [Parameter(Mandatory=$true)][int]$MinimumThroughputPerVolume
+    )
+
+    if ($Volumes.Count -eq 0) {
+        return @()
+    }
+
+    $poolThroughputBudgetMibps = Get-AnfManualPoolThroughputBudgetMibps -PoolSizeBytes $PoolSizeBytes -ServiceLevel $TargetServiceLevel
+    $minimumTotal = $Volumes.Count * $MinimumThroughputPerVolume
+    if ($minimumTotal -gt $poolThroughputBudgetMibps) {
+        throw "Minimum Manual QoS throughput requirement exceeds target pool throughput. Volumes=$($Volumes.Count), MinimumPerVolume=$MinimumThroughputPerVolume MiB/s, Required=$minimumTotal MiB/s, Available=$poolThroughputBudgetMibps MiB/s."
+    }
+
+    $volumeInputs = foreach ($volume in $Volumes) {
+        [PSCustomObject]@{
+            Name = $volume.Name
+            Id = $volume.Id
+            SizeGiB = [math]::Round($volume.UsageThreshold / $bytesPerGiB, 3)
+            CurrentThroughputMibps = [int][math]::Round([double]$volume.ThroughputMibps, 0, [System.MidpointRounding]::AwayFromZero)
+        }
+    }
+
+    $totalSizeGiB = [double](($volumeInputs | Measure-Object -Property SizeGiB -Sum).Sum)
+    if ($totalSizeGiB -le 0) {
+        throw "Total volume size is 0 GiB. Cannot calculate Manual QoS mimic-auto allocation."
+    }
+
+    $remainingThroughput = $poolThroughputBudgetMibps - $minimumTotal
+    $planRows = foreach ($volume in $volumeInputs) {
+        $rawTarget = $MinimumThroughputPerVolume + (($remainingThroughput * [double]$volume.SizeGiB) / $totalSizeGiB)
+        $floorTarget = [math]::Floor($rawTarget)
+        [PSCustomObject]@{
+            Name = $volume.Name
+            VolumeId = $volume.Id
+            SizeGiB = $volume.SizeGiB
+            CapacityPercentage = [math]::Round(([double]$volume.SizeGiB / $totalSizeGiB) * 100, 3)
+            CurrentThroughputMibps = $volume.CurrentThroughputMibps
+            NewThroughputMibps = [int]$floorTarget
+            FractionalRemainder = [double]($rawTarget - $floorTarget)
+            NetChangeInThroughputMibps = 0
+            PoolThroughputBudgetMibps = $poolThroughputBudgetMibps
+        }
+    }
+
+    $allocatedThroughput = [int](($planRows | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+    $remainingRoundingThroughput = $poolThroughputBudgetMibps - $allocatedThroughput
+    if ($remainingRoundingThroughput -gt 0) {
+        foreach ($row in @($planRows | Sort-Object -Property FractionalRemainder, Name -Descending | Select-Object -First $remainingRoundingThroughput)) {
+            $row.NewThroughputMibps += 1
+        }
+    }
+
+    foreach ($row in $planRows) {
+        $row.NetChangeInThroughputMibps = $row.NewThroughputMibps - $row.CurrentThroughputMibps
+    }
+
+    return @($planRows | Sort-Object -Property NetChangeInThroughputMibps, Name)
+}
+
+function Write-AnfManualThroughputPlan {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Plan,
+        [Parameter(Mandatory=$true)][string]$TargetPoolName,
+        [Parameter(Mandatory=$true)][string]$TargetServiceLevel
+    )
+
+    if ($Plan.Count -eq 0) {
+        return
+    }
+
+    $budget = ($Plan | Select-Object -First 1).PoolThroughputBudgetMibps
+    $targetTotal = [int](($Plan | Measure-Object -Property NewThroughputMibps -Sum).Sum)
+    Write-Output "Manual QoS mimic-auto target for '$TargetPoolName' ($TargetServiceLevel): $targetTotal MiB/s of $budget MiB/s"
+    $Plan | Select-Object Name, SizeGiB, CapacityPercentage, CurrentThroughputMibps, NewThroughputMibps, NetChangeInThroughputMibps | Format-Table -AutoSize
+}
+
+function Apply-AnfManualThroughputPlan {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Plan,
+        [Parameter(Mandatory=$true)][string]$Phase,
+        [Parameter(Mandatory=$true)][bool]$DecreasesOnly,
+        [Parameter(Mandatory=$true)][bool]$IncreasesOnly
+    )
+
+    $updates = @($Plan | Where-Object { $_.NetChangeInThroughputMibps -ne 0 })
+    if ($DecreasesOnly) {
+        $updates = @($updates | Where-Object { $_.NetChangeInThroughputMibps -lt 0 })
+    }
+    if ($IncreasesOnly) {
+        $updates = @($updates | Where-Object { $_.NetChangeInThroughputMibps -gt 0 })
+    }
+
+    if ($updates.Count -eq 0) {
+        Write-Output "Manual QoS $Phase throughput updates: none."
+        return
+    }
+
+    foreach ($row in @($updates | Sort-Object -Property NetChangeInThroughputMibps, Name)) {
+        if (Test-AnfYes -Value $testMode) {
+            Write-Output "TEST MODE: Manual QoS $Phase throughput for volume '$($row.Name)' would change from $($row.CurrentThroughputMibps) to $($row.NewThroughputMibps) MiB/s."
+        } else {
+            Write-Output "Updating Manual QoS $Phase throughput for volume '$($row.Name)' from $($row.CurrentThroughputMibps) to $($row.NewThroughputMibps) MiB/s..."
+            Update-AnfVolumeThroughput -VolumeResourceId $row.VolumeId -TargetThroughputMibps $row.NewThroughputMibps
+        }
+    }
 }
 
 function Remove-AnfPool {
@@ -776,8 +995,8 @@ try {
             if (Test-AnfFlexibleServiceLevel -ServiceLevel $state.Pool.ServiceLevel) {
                 throw "Flexible Service Level is not supported by this script. Pool '$($state.PoolName)' is Flexible. FSL throughput decreases can be limited by a 24-hour cooldown after an increase."
             }
-            if ($state.Pool.QosType -ne "Auto") {
-                throw "Auto QoS only: pool '$($state.PoolName)' has QoS type '$($state.Pool.QosType)'. This script does not manage Manual QoS volume throughput."
+            if ($state.Pool.QosType -ne "Auto" -and $state.Pool.QosType -ne "Manual") {
+                throw "Pool '$($state.PoolName)' has unsupported QoS type '$($state.Pool.QosType)'. Expected Auto or Manual."
             }
         } else {
             Write-Output "Pool state: $($state.Label) pool '$($state.PoolName)' does not exist."
@@ -797,10 +1016,18 @@ try {
     $desiredState = $states | Where-Object { $_.PoolName -eq $desiredPoolName } | Select-Object -First 1
     $sourcePool = $sourceState.Pool
     $volumesToMove = @($sourceState.Volumes)
+    $sourceQosType = "$($sourcePool.QosType)"
+    $manualThroughputPlan = @()
 
     Write-Output "Active pool: $($sourceState.PoolName) ($($sourceState.Label))"
+    Write-Output "Active pool QoS type: $sourceQosType"
     Write-Output "Desired pool for current schedule: $desiredPoolName ($targetPoolLabel)"
     Write-Output "Volumes in active pool: $($volumesToMove.Count)"
+
+    if ($sourceQosType -eq "Manual") {
+        $manualThroughputPlan = @(Get-AnfManualMimicAutoPlan -Volumes $volumesToMove -PoolSizeBytes $sourcePool.Size -TargetServiceLevel $targetServiceLevel -MinimumThroughputPerVolume $manualQosMinimumThroughputPerVolume)
+        Write-AnfManualThroughputPlan -Plan $manualThroughputPlan -TargetPoolName $desiredPoolName -TargetServiceLevel $targetServiceLevel
+    }
 
     if ($sourceState.PoolName -eq $desiredPoolName) {
         if ($sourcePool.ServiceLevel -ne $targetServiceLevel) {
@@ -808,15 +1035,30 @@ try {
         }
 
         Write-Output "The active volumes are already in the correct $targetPoolLabel pool for the current schedule."
+        if ($sourceQosType -eq "Manual") {
+            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "in-place decrease" -DecreasesOnly $true -IncreasesOnly $false
+            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "in-place increase" -DecreasesOnly $false -IncreasesOnly $true
+        }
         continue
     }
 
     if ($desiredState.Pool -and $desiredState.Pool.ServiceLevel -ne $targetServiceLevel) {
         throw "Existing target pool '$desiredPoolName' has service level '$($desiredState.Pool.ServiceLevel)' but expected '$targetServiceLevel'."
     }
+    if ($desiredState.Pool -and $desiredState.Pool.QosType -ne $sourceQosType) {
+        if (-not ($sourceQosType -eq "Manual" -and $desiredState.Pool.QosType -eq "Auto" -and $desiredState.VolumeCount -eq 0)) {
+            throw "Existing target pool '$desiredPoolName' has QoS type '$($desiredState.Pool.QosType)' but active source pool '$($sourceState.PoolName)' is '$sourceQosType'. Resolve the mixed QoS pool set before continuing."
+        }
+    }
 
     if (Test-AnfYes -Value $testMode) {
-        Write-Output "TEST MODE: Would ensure target pool '$desiredPoolName' exists with service level '$targetServiceLevel' and size copied from '$($sourceState.PoolName)'."
+        Write-Output "TEST MODE: Would ensure target pool '$desiredPoolName' exists with service level '$targetServiceLevel', QoS type '$sourceQosType', and size copied from '$($sourceState.PoolName)'."
+        if ($desiredState.Pool -and $desiredState.Pool.QosType -ne $sourceQosType) {
+            Write-Output "TEST MODE: Would convert empty target pool '$desiredPoolName' from Auto QoS to Manual QoS before moving volumes."
+        }
+        if ($sourceQosType -eq "Manual") {
+            Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "target-service-level" -DecreasesOnly $false -IncreasesOnly $false
+        }
         foreach ($volume in $volumesToMove) {
             Write-Output "TEST MODE: Would move volume '$($volume.Name)' from '$($sourceState.PoolName)' to '$desiredPoolName'."
         }
@@ -827,15 +1069,32 @@ try {
     $targetPool = $desiredState.Pool
     if (-not $targetPool) {
         Write-Output "Creating target pool '$desiredPoolName' with service level '$targetServiceLevel'..."
-        $targetPool = New-AnfPool -SourcePool $sourcePool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -TargetPoolName $desiredPoolName -TargetServiceLevel $targetServiceLevel
+        $targetPool = New-AnfPool -SourcePool $sourcePool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -TargetPoolName $desiredPoolName -TargetServiceLevel $targetServiceLevel -TargetQosType $sourceQosType
         Write-Output "Target pool created: $($targetPool.Id)"
     } else {
         Write-Output "Using existing empty target pool: $($targetPool.Id)"
+        if ($sourceQosType -eq "Manual" -and $targetPool.QosType -ne "Manual") {
+            Write-Output "Converting empty target pool '$desiredPoolName' from '$($targetPool.QosType)' to Manual QoS..."
+            Update-AnfPoolQosTypeManual -PoolResourceId $targetPool.Id
+            $targetPool = Get-AnfPool -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $desiredPoolName
+            Write-Output "Target pool QoS after conversion: $($targetPool.QosType)"
+        }
+    }
+
+    if ($sourceQosType -eq "Manual") {
+        Apply-AnfManualThroughputPlan -Plan $manualThroughputPlan -Phase "pre-move decrease" -DecreasesOnly $true -IncreasesOnly $false
     }
 
     foreach ($volume in $volumesToMove) {
         Write-Output "Moving volume '$($volume.Name)' from '$($sourceState.PoolName)' to '$desiredPoolName'..."
         Move-AnfVolumeToPool -VolumeResourceId $volume.Id -TargetPoolResourceId $targetPool.Id
+    }
+
+    if ($sourceQosType -eq "Manual") {
+        $movedVolumes = @(Get-AnfVolumes -SubscriptionId $subscriptionId -ResourceGroupName $resourceGroupName -AccountName $anfAccountName -PoolName $desiredPoolName)
+        $postMoveThroughputPlan = @(Get-AnfManualMimicAutoPlan -Volumes $movedVolumes -PoolSizeBytes $targetPool.Size -TargetServiceLevel $targetServiceLevel -MinimumThroughputPerVolume $manualQosMinimumThroughputPerVolume)
+        Apply-AnfManualThroughputPlan -Plan $postMoveThroughputPlan -Phase "post-move decrease" -DecreasesOnly $true -IncreasesOnly $false
+        Apply-AnfManualThroughputPlan -Plan $postMoveThroughputPlan -Phase "post-move increase" -DecreasesOnly $false -IncreasesOnly $true
     }
 
     Write-Output "Removing source pool '$($sourceState.PoolName)' after completed volume moves..."
