@@ -56,6 +56,40 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 
 Weekday and weekend pool names are derived automatically from the initial pool name parsed from `ANF_CapacityPoolResourceId`: `<initial-pool>-weekday` and `<initial-pool>-weekend`. The deployment workflow does not ask for pool names because this script manages the full pool set rather than individual volume targets.
 
+## Time Zone Format
+
+`ANF_TimeZone` must be a .NET `TimeZoneInfo` time zone ID string. The Deploy to Azure and Deploy to Azure Gov templates expose this as a dropdown of common Windows time zone IDs. For Azure Automation, use the Windows time zone ID format, not a UTC offset, abbreviation, or display label.
+
+Do use values like `Central Standard Time`, `GMT Standard Time`, or `Tokyo Standard Time`.
+
+Do not use values like `CST`, `CDT`, `UTC-06:00`, `America/Chicago`, or `(UTC-06:00) Central Time (US & Canada)` for the Automation variable.
+
+The word `Standard` in Windows time zone IDs does not mean daylight saving time is ignored. For example, `Pacific Standard Time` represents Pacific Time and follows the daylight saving rules for that time zone when applicable.
+
+If your required Windows time zone ID is not in the deployment dropdown, leave the script in `ANF_TestMode=Yes`, deploy with any listed value, then edit the `ANF_TimeZone` Automation variable before setting `ANF_TestMode` to `No`.
+
+Common examples:
+
+| Region | Example `ANF_TimeZone` value |
+| --- | --- |
+| UTC | `UTC` |
+| US Pacific | `Pacific Standard Time` |
+| US Mountain | `Mountain Standard Time` |
+| US Central | `Central Standard Time` |
+| US Eastern | `Eastern Standard Time` |
+| United Kingdom, Ireland, Portugal | `GMT Standard Time` |
+| Central Europe | `W. Europe Standard Time` |
+| France, Spain, Belgium, Denmark | `Romance Standard Time` |
+| South Africa | `South Africa Standard Time` |
+| UAE, Oman | `Arabian Standard Time` |
+| India | `India Standard Time` |
+| Singapore, Malaysia | `Singapore Standard Time` |
+| China | `China Standard Time` |
+| Japan | `Tokyo Standard Time` |
+| Korea | `Korea Standard Time` |
+| Eastern Australia | `AUS Eastern Standard Time` |
+| New Zealand | `New Zealand Standard Time` |
+
 ## Behavior
 
 - The runbook detects whether the current localized time is inside the weekend window.
