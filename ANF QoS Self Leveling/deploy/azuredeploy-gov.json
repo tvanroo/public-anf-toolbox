@@ -101,14 +101,14 @@
     },
     "runbookScriptUri": {
       "type": "string",
-      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-self-leveling-modernization/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1",
+      "defaultValue": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1",
       "metadata": {
         "description": "Source URL of the runbook script file to import and publish."
       }
     }
   },
   "variables": {
-    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/codex/qos-self-leveling-modernization/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json"
+    "sharedTemplateUri": "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json"
   },
   "resources": [
     {

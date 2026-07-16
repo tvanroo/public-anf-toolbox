@@ -16,8 +16,7 @@ $readmeText = Get-Content -LiteralPath $readmePath -Raw
 $deployText = if (Test-Path -LiteralPath $deployPath) { Get-Content -LiteralPath $deployPath -Raw } else { "" }
 $deployGovText = if (Test-Path -LiteralPath $deployGovPath) { Get-Content -LiteralPath $deployGovPath -Raw } else { "" }
 $deployGovBadgeText = if (Test-Path -LiteralPath $deployGovBadgePath) { Get-Content -LiteralPath $deployGovBadgePath -Raw } else { "" }
-$wipBranchPath = 'codex/qos-self-leveling-modernization'
-$wipBranchPathForDeployUri = 'codex%2Fqos-self-leveling-modernization'
+$mainBranchPath = 'main'
 
 function Assert-Contains {
     param(
@@ -114,9 +113,9 @@ Assert-Contains -Haystack $deployText -Needle '"ANF_LevelingAgressionPercent"' -
 Assert-Contains -Haystack $deployText -Needle '"ANF_ThroughputLimitMetricAllowance"' -Message 'Expected commercial deploy template to create metric allowance Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_DecreaseRequiredCleanDays"' -Message 'Expected commercial deploy template to create decrease gate Automation variable.'
 Assert-Contains -Haystack $deployText -Needle '"monitoringReaderRoleDefinitionId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05"' -Message 'Expected Monitoring Reader role assignment for ARM metrics reads.'
-Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$wipBranchPathForDeployUri%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the WIP branch template.'
-Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1" -Message 'Expected deploy template to import the runbook from the WIP branch.'
-Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$wipBranchPath/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the WIP branch shared template.'
+Assert-Contains -Haystack $readmeText -Needle "public-anf-toolbox%2F$mainBranchPath%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json" -Message 'Expected commercial deploy button to point at the main branch template.'
+Assert-Contains -Haystack $deployText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$mainBranchPath/ANF%20QoS%20Self%20Leveling/ANF-QoS-Autoscale-SelfLeveling.ps1" -Message 'Expected deploy template to import the runbook from the main branch.'
+Assert-Contains -Haystack $deployGovText -Needle "raw.githubusercontent.com/tvanroo/public-anf-toolbox/$mainBranchPath/ANF%20QoS%20Self%20Leveling/deploy/azuredeploy.json" -Message 'Expected Azure Gov wrapper to link the main branch shared template.'
 Assert-Contains -Haystack $deployGovBadgeText -Needle 'Deploy to Azure Gov' -Message 'Expected local Azure Gov badge SVG.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.NetAppFiles"' -Message 'Expected deploy template not to import Az.NetAppFiles.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.Monitor"' -Message 'Expected deploy template not to import Az.Monitor.'
