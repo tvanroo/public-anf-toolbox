@@ -1,0 +1,117 @@
+#!/usr/bin/env pwsh
+
+$ErrorActionPreference = 'Stop'
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$scriptPath = Join-Path $repoRoot 'ANF Throughput Metrics Collector/ANF-throughput-metrics-collector.ps1'
+$rootDuplicatePath = Join-Path $repoRoot 'ANF-throughput-metrics-collector.ps1'
+$readmePath = Join-Path $repoRoot 'ANF Throughput Metrics Collector/README.md'
+$behaviorImagePath = Join-Path $repoRoot 'ANF Throughput Metrics Collector/media/throughput-metrics-collector.png'
+
+$scriptText = Get-Content -LiteralPath $scriptPath -Raw
+$readmeText = Get-Content -LiteralPath $readmePath -Raw
+
+function Assert-Contains {
+    param(
+        [Parameter(Mandatory=$true)][string]$Haystack,
+        [Parameter(Mandatory=$true)][string]$Needle,
+        [Parameter(Mandatory=$true)][string]$Message
+    )
+
+    if (-not $Haystack.Contains($Needle)) {
+        throw $Message
+    }
+}
+
+function Assert-NotContains {
+    param(
+        [Parameter(Mandatory=$true)][string]$Haystack,
+        [Parameter(Mandatory=$true)][string]$Needle,
+        [Parameter(Mandatory=$true)][string]$Message
+    )
+
+    if ($Haystack.Contains($Needle)) {
+        throw $Message
+    }
+}
+
+$tokens = $null
+$parseErrors = $null
+$null = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -gt 0) {
+    throw "PowerShell parser found errors in ANF-throughput-metrics-collector.ps1: $($parseErrors.Message -join '; ')"
+}
+
+if (Test-Path -LiteralPath $rootDuplicatePath) {
+    throw 'Expected empty root-level throughput metrics collector duplicate to be removed.'
+}
+
+Assert-Contains -Haystack $scriptText -Needle '$requiredModules = @(''Az.Accounts'')' -Message 'Expected Az.Accounts to be the only required module.'
+Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfSetting' -Message 'Expected setting helper for environment-variable driven runs.'
+Assert-Contains -Haystack $scriptText -Needle '[Environment]::GetEnvironmentVariable($Name)' -Message 'Expected local/Cloud Shell environment variable support.'
+Assert-Contains -Haystack $scriptText -Needle 'Get-AnfSetting -Name "ANF_CapacityPoolResourceId"' -Message 'Expected capacity pool Resource ID targeting.'
+Assert-Contains -Haystack $scriptText -Needle 'function Resolve-AnfCapacityPoolResourceIds' -Message 'Expected multiple capacity pool Resource ID support.'
+Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfDiscoveredCapacityPoolTargets' -Message 'Expected default ANF capacity pool discovery support.'
+Assert-Contains -Haystack $scriptText -Needle 'Get-AzSubscription' -Message 'Expected discovery to enumerate visible Azure subscriptions.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_SubscriptionId' -Message 'Expected optional subscription selection setting.'
+Assert-Contains -Haystack $scriptText -Needle 'function Select-AnfDiscoverySubscriptions' -Message 'Expected subscription selection helper.'
+Assert-Contains -Haystack $scriptText -Needle '$subscriptionPromptLines.Add("Multiple active Azure subscriptions are visible. Select one for ANF discovery:")' -Message 'Expected subscription picker list header to be embedded in the Read-Host prompt for Cloud Shell.'
+Assert-Contains -Haystack $scriptText -Needle '$subscriptionPromptLines.Add(("  [{0}] {1} ({2})"' -Message 'Expected subscription picker options to be embedded in the Read-Host prompt for Cloud Shell.'
+Assert-Contains -Haystack $scriptText -Needle 'Read-Host $subscriptionPrompt' -Message 'Expected local runs to prompt with the full subscription list when multiple are visible.'
+Assert-Contains -Haystack $scriptText -Needle 'Write-Host "Discovering ANF capacity pools in $($subscriptions.Count) selected subscription(s)..."' -Message 'Expected discovery status to be written to the host, not returned as fake target data.'
+Assert-Contains -Haystack $scriptText -Needle 'Azure Automation cannot prompt' -Message 'Expected non-interactive Automation fallback handling.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_AccountNameFilter' -Message 'Expected optional account name text filtering.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_PoolNameFilter' -Message 'Expected optional pool name text filtering.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_VolumeNameFilter' -Message 'Expected optional volume name text filtering.'
+Assert-Contains -Haystack $scriptText -Needle 'function Test-AnfTextFilter' -Message 'Expected contains-style text filter helper.'
+Assert-Contains -Haystack $scriptText -Needle '-split ''[\r\n;,]+''' -Message 'Expected multiple pool and volume values to split on new lines, semicolons, or commas.'
+Assert-Contains -Haystack $scriptText -Needle 'foreach ($anfTarget in $anfTargets)' -Message 'Expected per-pool independent processing.'
+Assert-Contains -Haystack $scriptText -Needle 'function Invoke-AnfArmJson' -Message 'Expected ARM REST helper.'
+Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfArmListValues' -Message 'Expected ARM list pagination helper.'
+Assert-Contains -Haystack $scriptText -Needle '$anfApiVersion = "2026-04-01"' -Message 'Expected modern ANF REST API version.'
+Assert-Contains -Haystack $scriptText -Needle 'function Get-AnfMetricSeries' -Message 'Expected metrics to be collected through ARM REST.'
+Assert-Contains -Haystack $scriptText -Needle 'ReadThroughput,WriteThroughput,TotalThroughput,OtherThroughput,throughputLimitReached' -Message 'Expected throughput metrics and throughputLimitReached metric list.'
+Assert-Contains -Haystack $scriptText -Needle 'MetricUnit' -Message 'Expected metric unit to be exported.'
+Assert-Contains -Haystack $scriptText -Needle 'AverageValue' -Message 'Expected raw average metric value to be exported.'
+Assert-Contains -Haystack $scriptText -Needle 'yyyyMMdd-HHmmssZ' -Message 'Expected timestamped default output file name.'
+Assert-Contains -Haystack $scriptText -Needle 'Export-Csv' -Message 'Expected CSV export.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_OutputPath' -Message 'Expected configurable output path.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_OverwriteOutput' -Message 'Expected overwrite guard.'
+Assert-Contains -Haystack $scriptText -Needle 'ANF_VolumeName' -Message 'Expected optional volume name filtering.'
+Assert-NotContains -Haystack $scriptText -Needle 'Missing required variable: ANF_CapacityPoolResourceId' -Message 'Expected capacity pool Resource ID not to be required.'
+Assert-NotContains -Haystack $scriptText -Needle 'Write-Output "Multiple active Azure subscriptions are visible. Select one for ANF discovery:"' -Message 'Expected subscription picker list header not to be captured by function output.'
+Assert-NotContains -Haystack $scriptText -Needle 'Read-Host "Enter subscription number"' -Message 'Expected subscription picker not to use a bare prompt with no visible menu in Cloud Shell.'
+Assert-NotContains -Haystack $scriptText -Needle 'Write-Output "Discovering ANF capacity pools in $($subscriptions.Count) selected subscription(s)..."' -Message 'Expected discovery status not to be captured by function output.'
+Assert-NotContains -Haystack $scriptText -Needle 'Az.NetAppFiles' -Message 'Expected script not to require or call Az.NetAppFiles.'
+Assert-NotContains -Haystack $scriptText -Needle 'Az.Monitor' -Message 'Expected script not to require Az.Monitor.'
+Assert-NotContains -Haystack $scriptText -Needle 'Get-AzNetAppFiles' -Message 'Expected script not to call Az.NetAppFiles cmdlets.'
+Assert-NotContains -Haystack $scriptText -Needle 'Get-AzMetric' -Message 'Expected script not to call Az.Monitor cmdlets.'
+Assert-NotContains -Haystack $scriptText -Needle 'example-rg' -Message 'Expected stale hard-coded targeting examples to be removed from script defaults.'
+
+Assert-Contains -Haystack $readmeText -Needle 'media/throughput-metrics-collector.png' -Message 'Expected README to include the collector behavior graphic.'
+Assert-Contains -Haystack $readmeText -Needle 'read-only' -Message 'Expected README to emphasize read-only behavior.'
+Assert-Contains -Haystack $readmeText -Needle 'Standard, Premium, Ultra, and Flexible Service Level' -Message 'Expected README to clarify service-level coverage.'
+Assert-Contains -Haystack $readmeText -Needle 'Copy this block as-is' -Message 'Expected README quick start to run without required edits.'
+Assert-Contains -Haystack $readmeText -Needle '# Download and prep the script.' -Message 'Expected README quick start to keep the download and prep section.'
+Assert-Contains -Haystack $readmeText -Needle '$DownloadStamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")' -Message 'Expected README quick start to use a cache-busting timestamp.'
+Assert-Contains -Haystack $readmeText -Needle '$ScriptPath = Join-Path (Get-Location) $ScriptName' -Message 'Expected README quick start to keep a stable downloaded script filename.'
+Assert-Contains -Haystack $readmeText -Needle '`?cacheBust=$DownloadStamp' -Message 'Expected README quick start to include a cache-busting download URL.'
+Assert-NotContains -Haystack $readmeText -Needle 'ANF-throughput-metrics-collector-$DownloadStamp.ps1' -Message 'Expected README quick start not to timestamp the downloaded script filename.'
+Assert-Contains -Haystack $readmeText -Needle '$isWindowsPowerShellHost' -Message 'Expected README quick start to avoid Unblock-File on Linux Cloud Shell.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_SubscriptionId` | prompt when multiple exist |' -Message 'Expected README settings table to document subscription selection.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_CapacityPoolResourceId` | discover visible pools |' -Message 'Expected README settings table to document optional Resource ID override.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_AccountNameFilter` | all accounts |' -Message 'Expected README settings table to document account filter.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_PoolNameFilter` | all pools |' -Message 'Expected README settings table to document pool filter.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_VolumeNameFilter` | all volumes |' -Message 'Expected README settings table to document volume filter.'
+Assert-Contains -Haystack $readmeText -Needle 'throughputLimitReached' -Message 'Expected README to document throughputLimitReached collection.'
+Assert-Contains -Haystack $readmeText -Needle 'ANF-throughput-metrics-<timestamp>.csv' -Message 'Expected README to document timestamped output file name.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_OutputPath` |' -Message 'Expected README settings table to document output path.'
+Assert-Contains -Haystack $readmeText -Needle 'Each capacity pool is queried independently' -Message 'Expected README to document no cross-pool assumptions.'
+Assert-NotContains -Haystack $readmeText -Needle 'Az.NetAppFiles' -Message 'Expected README not to list stale module requirement.'
+Assert-NotContains -Haystack $readmeText -Needle 'Az.Monitor' -Message 'Expected README not to list stale module requirement.'
+
+if (-not (Test-Path -LiteralPath $behaviorImagePath)) {
+    throw 'Expected Throughput Metrics Collector behavior graphic to exist.'
+}
+
+Write-Output 'ANF-Throughput-Metrics-Collector static checks passed.'
