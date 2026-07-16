@@ -490,11 +490,11 @@ function Select-AnfDiscoverySubscriptions {
         return @($currentSubscription)
     }
 
-    Write-Output ""
-    Write-Output "Multiple active Azure subscriptions are visible. Select one for ANF discovery:"
+    Write-Host ""
+    Write-Host "Multiple active Azure subscriptions are visible. Select one for ANF discovery:"
     for ($index = 0; $index -lt $Subscriptions.Count; $index++) {
         $subscription = $Subscriptions[$index]
-        Write-Output ("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription))
+        Write-Host ("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription))
     }
 
     while ($true) {
@@ -546,7 +546,7 @@ function Get-AnfDiscoveredCapacityPoolTargets {
     $targets = @()
     $seenResourceIds = @{}
     $subscriptions = @(Get-AnfDiscoverySubscriptions -SubscriptionSelections $SubscriptionSelections)
-    Write-Output "Discovering ANF capacity pools in $($subscriptions.Count) selected subscription(s)..."
+    Write-Host "Discovering ANF capacity pools in $($subscriptions.Count) selected subscription(s)..."
 
     foreach ($subscription in $subscriptions) {
         $subscriptionId = Get-AnfSubscriptionIdFromObject -Subscription $subscription
@@ -558,7 +558,7 @@ function Get-AnfDiscoveredCapacityPoolTargets {
 
         try {
             $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
-            Write-Output "Scanning subscription: $subscriptionName ($subscriptionId)"
+            Write-Host "Scanning subscription: $subscriptionName ($subscriptionId)"
             $accountResourceId = "/subscriptions/$subscriptionId/providers/Microsoft.NetApp/netAppAccounts"
             $accounts = @(Get-AnfArmListValues -ResourceId $accountResourceId -ApiVersion $anfApiVersion)
         } catch {
