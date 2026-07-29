@@ -4,6 +4,10 @@ This script reallocates Azure NetApp Files Manual QoS volume throughput based on
 
 ![ANF QoS Self Leveling behavior](media/qos-self-leveling-behavior.png)
 
+## Video Demo
+
+[![ANF QoS Self Leveling video demo](https://i.ytimg.com/vi/rBnVoKb-6zA/hqdefault.jpg)](https://www.youtube.com/embed/rBnVoKb-6zA?si=8EylTO078IEgq-IH&autoplay=0)
+
 ## Deploy
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Ftvanroo%2Fpublic-anf-toolbox%2Fmain%2FANF%2520QoS%2520Self%2520Leveling%2Fdeploy%2Fazuredeploy.json)
