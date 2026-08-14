@@ -59,4 +59,4 @@ Most mutating scripts default to test or preview mode and require an explicit op
 - [ANF Move AVD Profiles](https://github.com/tvanroo/public-anf-toolbox/tree/main/ANF%20Move%20AVD%20Profiles)
     - Migrates FSLogix AVD (Azure Virtual Desktop) profiles from existing SMB shares to Azure NetApp Files SMB shares with intelligent conflict resolution and profile-in-use detection for safe cutover operations.
 - [Robocopy Booster](https://github.com/tvanroo/public-anf-toolbox/tree/main/Robocopy%20Booster)
-    - Runs multiple source-to-destination Robocopy commands in parallel to speed up many-small-file migrations. Includes dry-run support, source/destination safety checks, delta rerun behavior, and V2 logging/no-logging A/B testing.
+    - Runs multiple source-to-destination Robocopy commands in parallel to speed up many-small-file migrations. Includes dry-run support, non-overlapping path guards, conservative concurrency defaults, durable per-job logs, and delta rerun behavior in one canonical script.
