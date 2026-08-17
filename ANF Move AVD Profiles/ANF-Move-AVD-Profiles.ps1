@@ -96,19 +96,28 @@ function Resolve-DirectoryPath {
         throw 'Directory path cannot be empty.'
     }
 
+    $providerPrefix = 'Microsoft.PowerShell.Core\FileSystem::'
+
     if (Test-Path -LiteralPath $Path) {
         if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
             throw "Path is not a directory: $Path"
         }
 
-        return (Resolve-Path -LiteralPath $Path).Path
+        $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    }
+    else {
+        if ($MustExist) {
+            throw "Directory does not exist: $Path"
+        }
+
+        $resolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     }
 
-    if ($MustExist) {
-        throw "Directory does not exist: $Path"
+    if ($resolvedPath.StartsWith($providerPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $resolvedPath = $resolvedPath.Substring($providerPrefix.Length)
     }
 
-    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    return $resolvedPath
 }
 
 function ConvertTo-ComparablePath {

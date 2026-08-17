@@ -15,6 +15,16 @@ By using any content from this repository, you acknowledge that you do so at you
 [ANF Move AVD Profiles](https://github.com/tvanroo/public-anf-toolbox/blob/main/ANF%20Move%20AVD%20Profiles/ANF-Move-AVD-Profiles.ps1)
     - Migrates FSLogix AVD (Azure Virtual Desktop) profiles from existing SMB shares to Azure NetApp Files SMB shares with intelligent conflict resolution and profile-in-use detection. Result: Safe migration of user profiles with minimal downtime and data integrity protection.
 
+## Run Directly from GitHub
+
+Run the latest version directly from GitHub in a child Windows PowerShell process with execution policy bypassed for that process only:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "iex (irm 'https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/main/ANF%20Move%20AVD%20Profiles/ANF-Move-AVD-Profiles.ps1')"
+```
+
+The script prompts for the mandatory `SourcePath` and `DestinationPath` values. This command downloads and executes the current script from the repository, so review the linked script before running it. The default mode performs a live, non-destructive copy and retains source files.
+
 ## Script Purpose
 This script is designed to run from a Windows VM or Windows host that has SMB access to both the source and destination shares. It migrates FSLogix profiles from legacy SMB file shares to Azure NetApp Files (ANF) SMB shares in Azure Virtual Desktop (AVD) environments. It performs intelligent file synchronization with conflict resolution and automatically detects profiles that are currently in use to prevent data corruption.
 
