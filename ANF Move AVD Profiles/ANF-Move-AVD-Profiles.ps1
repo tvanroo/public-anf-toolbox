@@ -55,6 +55,17 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
+function Assert-DryRunMutationIsBlocked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Operation
+    )
+
+    if ($DryRun) {
+        throw "DRY RUN safety interlock prevented $Operation. -DryRun overrides every operation that can change source or destination files."
+    }
+}
+
 function Assert-AvdMigrationRuntime {
     param(
         [Parameter(Mandatory = $true)]
@@ -213,6 +224,7 @@ function Remove-FailedCopyArtifact {
         return
     }
 
+    Assert-DryRunMutationIsBlocked -Operation "removing failed $Description"
     Remove-Item -LiteralPath $FilePath -Force
     Write-Host "Removed failed $Description`: $FilePath" -ForegroundColor Red
 }
@@ -231,6 +243,7 @@ function Restore-BackupFileIfPresent {
         return
     }
 
+    Assert-DryRunMutationIsBlocked -Operation 'restoring a destination backup file'
     Move-Item -LiteralPath $BackupFilePath -Destination $DestinationFilePath -Force
     Write-Host "Restored previous destination file after failed replacement: $DestinationFilePath" -ForegroundColor Yellow
 }
@@ -246,6 +259,7 @@ function Remove-BackupFileIfPresent {
         return
     }
 
+    Assert-DryRunMutationIsBlocked -Operation 'removing a destination backup file'
     Remove-Item -LiteralPath $BackupFilePath -Force
 }
 
@@ -282,6 +296,8 @@ function Copy-EffectiveDaclAsExplicit {
         [Parameter(Mandatory = $true)]
         [string]$DestinationPath
     )
+
+    Assert-DryRunMutationIsBlocked -Operation 'synchronizing destination ACLs'
 
     $sourceAcl = Get-Acl -LiteralPath $SourcePath
     $destinationAcl = if (Test-Path -LiteralPath $DestinationPath -PathType Container) {
@@ -325,6 +341,8 @@ function Copy-FileMetadataFromSource {
         [string]$DestinationFilePath
     )
 
+    Assert-DryRunMutationIsBlocked -Operation 'synchronizing destination file metadata'
+
     $sourceItem = Get-Item -LiteralPath $SourceFilePath -Force
     $destinationItem = Get-Item -LiteralPath $DestinationFilePath -Force
     Copy-EffectiveDaclAsExplicit -SourcePath $SourceFilePath -DestinationPath $DestinationFilePath
@@ -343,6 +361,8 @@ function Move-StagedFileIntoPlace {
         [Parameter(Mandatory = $true)]
         [string]$DestinationFilePath
     )
+
+    Assert-DryRunMutationIsBlocked -Operation 'promoting a staged destination file'
 
     if (Test-Path -LiteralPath $DestinationFilePath -PathType Leaf) {
         $backupFilePath = New-StagedDestinationFilePath -DestinationFilePath $DestinationFilePath -Purpose 'backup'
@@ -382,6 +402,8 @@ function Copy-DirectoryMetadataFromSource {
         [Parameter(Mandatory = $true)]
         [string]$DestinationDirectoryPath
     )
+
+    Assert-DryRunMutationIsBlocked -Operation 'synchronizing destination directory metadata'
 
     $sourceItem = Get-Item -LiteralPath $SourceDirectoryPath -Force
     $destinationItem = Get-Item -LiteralPath $DestinationDirectoryPath -Force
@@ -430,6 +452,7 @@ function Sync-ProfilePermissions {
 
         try {
             if (-not (Test-Path -LiteralPath $destinationDirectoryPath -PathType Container)) {
+                Assert-DryRunMutationIsBlocked -Operation 'creating an empty destination directory'
                 New-Item -Path $destinationDirectoryPath -ItemType Directory -Force | Out-Null
                 Write-Host "Created empty destination directory: $destinationDirectoryPath" -ForegroundColor Cyan
             }
@@ -509,6 +532,8 @@ function Complete-SourceCleanupAfterAclSync {
         return
     }
 
+    Assert-DryRunMutationIsBlocked -Operation 'deleting verified source files'
+
     if ($script:Summary.AclSyncFailures -gt 0 -or $script:Summary.AclMissingDestinationFiles -gt 0) {
         Write-Warning 'Source cleanup was skipped because ACL synchronization did not complete successfully.'
         return
@@ -565,6 +590,7 @@ function Copy-ProfileFile {
             Write-Host "DRY RUN: Would create destination directory: $destinationDirectory" -ForegroundColor Cyan
         }
         else {
+            Assert-DryRunMutationIsBlocked -Operation 'creating a destination directory'
             New-Item -Path $destinationDirectory -ItemType Directory -Force | Out-Null
             Write-Host "Created destination directory: $destinationDirectory" -ForegroundColor Cyan
         }
@@ -575,6 +601,8 @@ function Copy-ProfileFile {
         $script:Summary.PlannedCopies++
         return
     }
+
+    Assert-DryRunMutationIsBlocked -Operation 'copying a profile file'
 
     $stagedDestinationFilePath = New-StagedDestinationFilePath -DestinationFilePath $DestinationFilePath
     $backupFilePath = $null
@@ -682,6 +710,7 @@ if ($null -ne $destinationItem -and (($destinationItem.Attributes -band [System.
 }
 
 if (-not $DryRun -and -not (Test-Path -LiteralPath $resolvedDestination)) {
+    Assert-DryRunMutationIsBlocked -Operation 'creating the destination root directory'
     New-Item -Path $resolvedDestination -ItemType Directory -Force | Out-Null
 }
 
@@ -689,7 +718,7 @@ Write-Host '=== ANF Move AVD Profiles - Configuration ===' -ForegroundColor Cyan
 Write-Host "Source Path: $resolvedSource" -ForegroundColor White
 Write-Host "Destination Path: $resolvedDestination" -ForegroundColor White
 Write-Host "Filter String: $(if ([string]::IsNullOrWhiteSpace($FilterString)) { '<none>' } else { $FilterString })" -ForegroundColor White
-Write-Host "Delete Source After Verified Copy: $($DeleteSourceAfterVerifiedCopy.IsPresent)" -ForegroundColor White
+Write-Host "Delete Source After Verified Copy: $($DeleteSourceAfterVerifiedCopy.IsPresent)$(if ($DryRun -and $DeleteSourceAfterVerifiedCopy) { ' (ignored by DryRun)' })" -ForegroundColor White
 Write-Host "Dry Run: $($DryRun.IsPresent)" -ForegroundColor White
 Write-Host 'Default mode is copy/update only; source files are preserved.' -ForegroundColor Green
 Write-Host '=============================================' -ForegroundColor Cyan

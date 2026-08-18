@@ -47,6 +47,8 @@ Assert-NotContains -Haystack $scriptText -Needle 'Ssdfgsdfhsdfh' -Message 'Expec
 Assert-Contains -Haystack $scriptText -Needle 'function Assert-AvdMigrationRuntime' -Message 'Expected live-run Windows/BITS preflight.'
 Assert-Contains -Haystack $scriptText -Needle 'Get-Command -Name Start-BitsTransfer' -Message 'Expected explicit BITS availability check.'
 Assert-Contains -Haystack $scriptText -Needle 'Assert-AvdMigrationRuntime -RequireBits:(-not $DryRun)' -Message 'Expected live runs to require BITS while allowing dry-run planning.'
+Assert-Contains -Haystack $scriptText -Needle 'function Assert-DryRunMutationIsBlocked' -Message 'Expected a fail-closed dry-run mutation safety interlock.'
+Assert-Contains -Haystack $scriptText -Needle 'Assert-DryRunMutationIsBlocked -Operation' -Message 'Expected every write path to be protected by the dry-run safety interlock.'
 
 Assert-Contains -Haystack $scriptText -Needle 'function New-StagedDestinationFilePath' -Message 'Expected staged copy path helper.'
 Assert-Contains -Haystack $scriptText -Needle '$stagedDestinationFilePath = New-StagedDestinationFilePath -DestinationFilePath $DestinationFilePath' -Message 'Expected copies to target a staged file before replacing destination.'
@@ -77,5 +79,6 @@ Assert-Contains -Haystack $readmeText -Needle 'Windows VM' -Message 'Expected RE
 Assert-Contains -Haystack $readmeText -Needle 'staged temporary file' -Message 'Expected README to document staged-copy behavior.'
 Assert-Contains -Haystack $readmeText -Needle 'existing destination file is preserved' -Message 'Expected README to document existing destination preservation on failed updates.'
 Assert-Contains -Haystack $readmeText -Needle 'ACL Bootstrap' -Message 'Expected README to document ACL synchronization for existing profile items.'
+Assert-Contains -Haystack $readmeText -Needle 'fail-closed safety mode' -Message 'Expected README to document that DryRun overrides mutating operations.'
 
 Write-Output 'ANF-Move-AVD-Profiles static checks passed.'

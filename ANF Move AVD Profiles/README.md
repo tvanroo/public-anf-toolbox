@@ -70,7 +70,7 @@ If an update fails, the existing destination file is preserved or restored from 
     -DryRun
 ```
 
-Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerifiedCopy` only for a final cutover cleanup after reviewing the copy results.
+Remove `-DryRun` to copy/update the destination. `-DryRun` is a fail-closed safety mode: it overrides `-DeleteSourceAfterVerifiedCopy` and every other action that can change source or destination files. Add `-DeleteSourceAfterVerifiedCopy` only for a final cutover cleanup after reviewing the copy results.
 
 ## Prerequisites
 - **Dual Path Configuration**: Both old and new SMB paths should be configured in FSLogix settings
@@ -96,7 +96,7 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 - Consolidate profiles from multiple legacy shares
 
 ## Safety Features
-- **Dry Run Mode**: `-DryRun` lists copy, overwrite, and optional cleanup actions without changing files
+- **Dry Run Mode**: `-DryRun` lists copy, overwrite, and optional cleanup actions without changing files; internal safety interlocks block any attempted file, directory, ACL, metadata, or cleanup mutation
 - **Non-Destructive Default**: Source files are preserved unless `-DeleteSourceAfterVerifiedCopy` is provided
 - **Verified Source Cleanup**: Optional source deletion requires matching destination size and SHA256 hash
 - **Staged Copy Safety**: Existing destination files are not overwritten until the staged temporary file is copied and validated; source metadata is applied to the final destination before source cleanup is allowed
