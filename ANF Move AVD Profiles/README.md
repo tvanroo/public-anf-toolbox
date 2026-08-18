@@ -101,6 +101,7 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 - **Verified Source Cleanup**: Optional source deletion requires matching destination size and SHA256 hash
 - **Staged Copy Safety**: Existing destination files are not overwritten until the staged temporary file is copied and validated; source metadata is applied to the final destination before source cleanup is allowed
 - **ACL Bootstrap**: Applies the source ACL and metadata to each profile directory (including empty directories) and to already-copied files after content validation. Files with different source and destination content are left unchanged and reported for manual resolution.
+- **Inherited ACL Materialization**: When source permissions are inherited from a different parent, the effective source permissions are written as explicit destination entries. This prevents the destination from silently retaining unrelated inherited permissions such as `Everyone`.
 - **Destination Restore**: If replacement validation fails, the previous destination file is restored when one existed
 - **Profile Lock Detection**: Automatically skips profiles with active `.metadata` files
 - **Conflict Logging**: Clear console output showing all actions taken

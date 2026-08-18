@@ -249,6 +249,73 @@ function Remove-BackupFileIfPresent {
     Remove-Item -LiteralPath $BackupFilePath -Force
 }
 
+function Get-EffectiveDaclSignature {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $acl = Get-Acl -LiteralPath $Path
+    return @($acl.Access | ForEach-Object {
+        $identity = try {
+            $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        }
+        catch {
+            $_.IdentityReference.Value
+        }
+
+        '{0}|{1}|{2}|{3}|{4}' -f @(
+            $identity,
+            [int]$_.FileSystemRights,
+            [int]$_.InheritanceFlags,
+            [int]$_.PropagationFlags,
+            [int]$_.AccessControlType
+        )
+    } | Sort-Object)
+}
+
+function Copy-EffectiveDaclAsExplicit {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourcePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath
+    )
+
+    $sourceAcl = Get-Acl -LiteralPath $SourcePath
+    $destinationAcl = if (Test-Path -LiteralPath $DestinationPath -PathType Container) {
+        [System.Security.AccessControl.DirectorySecurity]::new()
+    }
+    else {
+        [System.Security.AccessControl.FileSecurity]::new()
+    }
+
+    # Inherited ACEs cannot be copied as inherited ACEs when the destination parent has a different ACL.
+    # Protect the destination DACL and materialize the source's effective ACEs as explicit entries instead.
+    $destinationAcl.SetAccessRuleProtection($true, $false)
+    foreach ($sourceRule in @($sourceAcl.Access)) {
+        $explicitRule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sourceRule.IdentityReference,
+            $sourceRule.FileSystemRights,
+            $sourceRule.InheritanceFlags,
+            $sourceRule.PropagationFlags,
+            $sourceRule.AccessControlType
+        )
+        [void]$destinationAcl.AddAccessRule($explicitRule)
+    }
+
+    $destinationItem = Get-Item -LiteralPath $DestinationPath -Force
+    [System.IO.FileSystemAclExtensions]::SetAccessControl($destinationItem, $destinationAcl)
+
+    $sourceSignature = @(Get-EffectiveDaclSignature -Path $SourcePath)
+    $destinationSignature = @(Get-EffectiveDaclSignature -Path $DestinationPath)
+    $differences = @(Compare-Object -ReferenceObject $sourceSignature -DifferenceObject $destinationSignature)
+    if ($differences.Count -gt 0) {
+        throw "Destination effective DACL does not match source after ACL synchronization: $DestinationPath"
+    }
+}
+
 function Copy-FileMetadataFromSource {
     param(
         [Parameter(Mandatory = $true)]
@@ -260,9 +327,7 @@ function Copy-FileMetadataFromSource {
 
     $sourceItem = Get-Item -LiteralPath $SourceFilePath -Force
     $destinationItem = Get-Item -LiteralPath $DestinationFilePath -Force
-    $sourceAcl = Get-Acl -LiteralPath $SourceFilePath
-
-    Set-Acl -LiteralPath $DestinationFilePath -AclObject $sourceAcl
+    Copy-EffectiveDaclAsExplicit -SourcePath $SourceFilePath -DestinationPath $DestinationFilePath
 
     $destinationItem.CreationTimeUtc = $sourceItem.CreationTimeUtc
     $destinationItem.LastWriteTimeUtc = $sourceItem.LastWriteTimeUtc
@@ -320,9 +385,7 @@ function Copy-DirectoryMetadataFromSource {
 
     $sourceItem = Get-Item -LiteralPath $SourceDirectoryPath -Force
     $destinationItem = Get-Item -LiteralPath $DestinationDirectoryPath -Force
-    $sourceAcl = Get-Acl -LiteralPath $SourceDirectoryPath
-
-    Set-Acl -LiteralPath $DestinationDirectoryPath -AclObject $sourceAcl
+    Copy-EffectiveDaclAsExplicit -SourcePath $SourceDirectoryPath -DestinationPath $DestinationDirectoryPath
 
     $destinationItem.CreationTimeUtc = $sourceItem.CreationTimeUtc
     $destinationItem.LastWriteTimeUtc = $sourceItem.LastWriteTimeUtc
