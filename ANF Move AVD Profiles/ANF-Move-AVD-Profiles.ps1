@@ -305,8 +305,183 @@ function Remove-SourceFileIfRequested {
         return
     }
 
-    Remove-Item -LiteralPath $SourceFilePath -Force
-    Write-Host "Deleted verified source file: $SourceFilePath" -ForegroundColor Yellow
+    $script:SourceFilesPendingDeletion.Add($SourceFilePath)
+    Write-Host "Source cleanup deferred until ACL synchronization completes: $SourceFilePath" -ForegroundColor Gray
+}
+
+function Copy-DirectoryMetadataFromSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceDirectoryPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationDirectoryPath
+    )
+
+    $sourceItem = Get-Item -LiteralPath $SourceDirectoryPath -Force
+    $destinationItem = Get-Item -LiteralPath $DestinationDirectoryPath -Force
+    $sourceAcl = Get-Acl -LiteralPath $SourceDirectoryPath
+
+    Set-Acl -LiteralPath $DestinationDirectoryPath -AclObject $sourceAcl
+
+    $destinationItem.CreationTimeUtc = $sourceItem.CreationTimeUtc
+    $destinationItem.LastWriteTimeUtc = $sourceItem.LastWriteTimeUtc
+    $destinationItem.LastAccessTimeUtc = $sourceItem.LastAccessTimeUtc
+    $destinationItem.Attributes = $sourceItem.Attributes
+}
+
+function Sync-ProfilePermissions {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceProfileDirectoryPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationRootPath
+    )
+
+    $sourceProfileRoot = Get-Item -LiteralPath $SourceProfileDirectoryPath -Force
+    $sourceDirectories = @($sourceProfileRoot) + @(Get-ChildItem -LiteralPath $SourceProfileDirectoryPath -Directory -Recurse -Force)
+
+    if ($DryRun) {
+        foreach ($sourceDirectory in $sourceDirectories) {
+            $relativePath = $sourceDirectory.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+            $destinationDirectoryPath = Join-Path -Path $DestinationRootPath -ChildPath $relativePath
+            Write-Host "DRY RUN: Would synchronize ACL and metadata for directory: $destinationDirectoryPath" -ForegroundColor Yellow
+            $script:Summary.AclDirectoriesPlanned++
+        }
+
+        $sourceFiles = @(Get-ChildItem -LiteralPath $SourceProfileDirectoryPath -File -Recurse -Force | Where-Object { $_.Extension -ne '.metadata' })
+        foreach ($sourceFile in $sourceFiles) {
+            $relativePath = $sourceFile.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+            $destinationFilePath = Join-Path -Path $DestinationRootPath -ChildPath $relativePath
+            Write-Host "DRY RUN: Would synchronize ACL and metadata for file: $destinationFilePath" -ForegroundColor Yellow
+            $script:Summary.AclFilesPlanned++
+        }
+
+        return
+    }
+
+    foreach ($sourceDirectory in ($sourceDirectories | Sort-Object { $_.FullName.Length })) {
+        $relativePath = $sourceDirectory.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+        $destinationDirectoryPath = Join-Path -Path $DestinationRootPath -ChildPath $relativePath
+
+        try {
+            if (-not (Test-Path -LiteralPath $destinationDirectoryPath -PathType Container)) {
+                New-Item -Path $destinationDirectoryPath -ItemType Directory -Force | Out-Null
+                Write-Host "Created empty destination directory: $destinationDirectoryPath" -ForegroundColor Cyan
+            }
+
+            Copy-DirectoryMetadataFromSource -SourceDirectoryPath $sourceDirectory.FullName -DestinationDirectoryPath $destinationDirectoryPath
+            $script:Summary.AclSyncedDirectories++
+        }
+        catch {
+            Write-Host "ERROR: Failed to synchronize ACL and metadata for directory $destinationDirectoryPath" -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            $script:Summary.AclSyncFailures++
+        }
+    }
+
+    $sourceFiles = @(Get-ChildItem -LiteralPath $SourceProfileDirectoryPath -File -Recurse -Force | Where-Object { $_.Extension -ne '.metadata' })
+    foreach ($sourceFile in $sourceFiles) {
+        $relativePath = $sourceFile.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+        $destinationFilePath = Join-Path -Path $DestinationRootPath -ChildPath $relativePath
+
+        if (-not (Test-Path -LiteralPath $destinationFilePath -PathType Leaf)) {
+            Write-Host "ERROR: Cannot synchronize ACL; destination file is missing: $destinationFilePath" -ForegroundColor Red
+            $script:Summary.AclMissingDestinationFiles++
+            continue
+        }
+
+        if (-not (Test-VerifiedCopy -SourceFilePath $sourceFile.FullName -DestinationFilePath $destinationFilePath)) {
+            Write-Host "WARNING: Skipped ACL synchronization because source and destination content differ: $destinationFilePath" -ForegroundColor Yellow
+            $script:Summary.AclFilesSkippedContentMismatch++
+            continue
+        }
+
+        try {
+            Copy-FileMetadataFromSource -SourceFilePath $sourceFile.FullName -DestinationFilePath $destinationFilePath
+            $script:Summary.AclSyncedFiles++
+        }
+        catch {
+            Write-Host "ERROR: Failed to synchronize ACL and metadata for file $destinationFilePath" -ForegroundColor Red
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+            $script:Summary.AclSyncFailures++
+        }
+    }
+}
+
+function Sync-RootDirectoryPermissions {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceRootPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationRootPath
+    )
+
+    if ($DryRun) {
+        Write-Host "DRY RUN: Would synchronize ACL and metadata for root directory: $DestinationRootPath" -ForegroundColor Yellow
+        $script:Summary.AclDirectoriesPlanned++
+        return
+    }
+
+    try {
+        Copy-DirectoryMetadataFromSource -SourceDirectoryPath $SourceRootPath -DestinationDirectoryPath $DestinationRootPath
+        $script:Summary.AclSyncedDirectories++
+    }
+    catch {
+        Write-Host "ERROR: Failed to synchronize ACL and metadata for root directory $DestinationRootPath" -ForegroundColor Red
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+        $script:Summary.AclSyncFailures++
+    }
+}
+
+function Complete-SourceCleanupAfterAclSync {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.IO.DirectoryInfo[]]$SourceProfileDirectories
+    )
+
+    if (-not $DeleteSourceAfterVerifiedCopy -or $DryRun) {
+        return
+    }
+
+    if ($script:Summary.AclSyncFailures -gt 0 -or $script:Summary.AclMissingDestinationFiles -gt 0) {
+        Write-Warning 'Source cleanup was skipped because ACL synchronization did not complete successfully.'
+        return
+    }
+
+    foreach ($sourceFilePath in $script:SourceFilesPendingDeletion) {
+        if (-not (Test-Path -LiteralPath $sourceFilePath -PathType Leaf)) {
+            continue
+        }
+
+        $relativePath = $sourceFilePath.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
+        $destinationFilePath = Join-Path -Path $resolvedDestination -ChildPath $relativePath
+        if (Test-VerifiedCopy -SourceFilePath $sourceFilePath -DestinationFilePath $destinationFilePath) {
+            Remove-Item -LiteralPath $sourceFilePath -Force
+            Write-Host "Deleted verified source file after ACL synchronization: $sourceFilePath" -ForegroundColor Yellow
+        }
+        else {
+            Write-Warning "Source file changed or destination no longer validates; source retained: $sourceFilePath"
+        }
+    }
+
+    foreach ($sourceDirectory in $SourceProfileDirectories) {
+        if (-not (Test-Path -LiteralPath $sourceDirectory.FullName -PathType Container)) {
+            continue
+        }
+
+        $remainingItems = @(Get-ChildItem -LiteralPath $sourceDirectory.FullName -Recurse -Force)
+        if ($remainingItems.Count -eq 0) {
+            Remove-Item -LiteralPath $sourceDirectory.FullName -Force
+            Write-Host "Deleted empty source directory: $($sourceDirectory.FullName)" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "Directory not empty, keeping: $($sourceDirectory.FullName)" -ForegroundColor Gray
+            Write-Host "  Remaining items: $($remainingItems.Count)" -ForegroundColor Gray
+        }
+    }
 }
 
 function Copy-ProfileFile {
@@ -468,9 +643,18 @@ $script:Summary = [ordered]@{
     ValidationFailures = 0
     MetadataFailures = 0
     RestoreFailures = 0
+    AclDirectoriesPlanned = 0
+    AclFilesPlanned = 0
+    AclSyncedDirectories = 0
+    AclSyncedFiles = 0
+    AclFilesSkippedContentMismatch = 0
+    AclMissingDestinationFiles = 0
+    AclSyncFailures = 0
 }
 
-$directories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory)
+$script:SourceFilesPendingDeletion = [System.Collections.Generic.List[string]]::new()
+$processedProfileDirectories = [System.Collections.Generic.List[System.IO.DirectoryInfo]]::new()
+$directories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory -Force)
 
 foreach ($directory in $directories) {
     if (-not [string]::IsNullOrWhiteSpace($FilterString) -and $directory.Name -notlike "*$FilterString*") {
@@ -479,7 +663,7 @@ foreach ($directory in $directories) {
         continue
     }
 
-    $metadataFiles = @(Get-ChildItem -LiteralPath $directory.FullName -Recurse -File | Where-Object { $_.Extension -eq '.metadata' })
+    $metadataFiles = @(Get-ChildItem -LiteralPath $directory.FullName -Recurse -File -Force | Where-Object { $_.Extension -eq '.metadata' })
     if ($metadataFiles.Count -gt 0) {
         Write-Host "Skipped directory (profile in use or metadata present): $($directory.FullName)" -ForegroundColor DarkGray
         $script:Summary.DirectoriesSkippedInUse++
@@ -487,7 +671,8 @@ foreach ($directory in $directories) {
     }
 
     $script:Summary.DirectoriesProcessed++
-    $sourceFiles = @(Get-ChildItem -LiteralPath $directory.FullName -File -Recurse | Where-Object { $_.Extension -ne '.metadata' })
+    $processedProfileDirectories.Add($directory)
+    $sourceFiles = @(Get-ChildItem -LiteralPath $directory.FullName -File -Recurse -Force | Where-Object { $_.Extension -ne '.metadata' })
 
     foreach ($sourceFile in $sourceFiles) {
         $relativePath = $sourceFile.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
@@ -520,28 +705,15 @@ foreach ($directory in $directories) {
         }
     }
 
-    if ($DeleteSourceAfterVerifiedCopy) {
-        try {
-            $remainingItems = @(Get-ChildItem -LiteralPath $directory.FullName -Recurse -Force)
-            if ($remainingItems.Count -eq 0) {
-                if ($DryRun) {
-                    Write-Host "DRY RUN: Would delete empty source directory: $($directory.FullName)" -ForegroundColor Yellow
-                }
-                else {
-                    Remove-Item -LiteralPath $directory.FullName -Force
-                    Write-Host "Deleted empty source directory: $($directory.FullName)" -ForegroundColor Yellow
-                }
-            }
-            else {
-                Write-Host "Directory not empty, keeping: $($directory.FullName)" -ForegroundColor Gray
-                Write-Host "  Remaining items: $($remainingItems.Count)" -ForegroundColor Gray
-            }
-        }
-        catch {
-            Write-Host "WARNING: Could not inspect or remove directory $($directory.FullName): $($_.Exception.Message)" -ForegroundColor Yellow
-        }
-    }
 }
+
+foreach ($directory in $processedProfileDirectories) {
+    Sync-ProfilePermissions -SourceProfileDirectoryPath $directory.FullName -DestinationRootPath $resolvedDestination
+}
+
+Sync-RootDirectoryPermissions -SourceRootPath $resolvedSource -DestinationRootPath $resolvedDestination
+
+Complete-SourceCleanupAfterAclSync -SourceProfileDirectories $processedProfileDirectories.ToArray()
 
 Write-Host ''
 Write-Host '=== ANF Move AVD Profiles - Summary ===' -ForegroundColor Cyan
@@ -550,7 +722,7 @@ foreach ($key in $script:Summary.Keys) {
 }
 Write-Host '=======================================' -ForegroundColor Cyan
 
-if ($script:Summary.CopyFailures -gt 0 -or $script:Summary.ValidationFailures -gt 0 -or $script:Summary.MetadataFailures -gt 0 -or $script:Summary.RestoreFailures -gt 0 -or $script:Summary.ConflictFiles -gt 0) {
+if ($script:Summary.CopyFailures -gt 0 -or $script:Summary.ValidationFailures -gt 0 -or $script:Summary.MetadataFailures -gt 0 -or $script:Summary.RestoreFailures -gt 0 -or $script:Summary.AclSyncFailures -gt 0 -or $script:Summary.AclMissingDestinationFiles -gt 0 -or $script:Summary.ConflictFiles -gt 0) {
     exit 1
 }
 

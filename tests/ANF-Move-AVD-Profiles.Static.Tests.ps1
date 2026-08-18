@@ -61,9 +61,18 @@ Assert-Contains -Haystack $scriptText -Needle 'LastWriteTimeUtc' -Message 'Expec
 Assert-Contains -Haystack $scriptText -Needle 'Get-Acl -LiteralPath $SourceFilePath' -Message 'Expected source ACL capture.'
 Assert-Contains -Haystack $scriptText -Needle 'Set-Acl -LiteralPath $DestinationFilePath' -Message 'Expected destination ACL application.'
 Assert-Contains -Haystack $scriptText -Needle 'MetadataFailures' -Message 'Expected metadata copy failures to be summarized and fail the run.'
+Assert-Contains -Haystack $scriptText -Needle 'function Copy-DirectoryMetadataFromSource' -Message 'Expected source directory ACL and metadata synchronization.'
+Assert-Contains -Haystack $scriptText -Needle 'function Sync-ProfilePermissions' -Message 'Expected post-copy ACL bootstrap for existing profile items.'
+Assert-Contains -Haystack $scriptText -Needle 'function Sync-RootDirectoryPermissions' -Message 'Expected source-root ACL synchronization.'
+Assert-Contains -Haystack $scriptText -Needle 'AclSyncedDirectories' -Message 'Expected directory ACL synchronization summary.'
+Assert-Contains -Haystack $scriptText -Needle 'AclSyncedFiles' -Message 'Expected file ACL bootstrap summary.'
+Assert-Contains -Haystack $scriptText -Needle 'AclDirectoriesPlanned' -Message 'Expected ACL dry-run planning without writes.'
+Assert-Contains -Haystack $scriptText -Needle 'AclSyncFailures' -Message 'Expected ACL synchronization failures to fail the run.'
+Assert-Contains -Haystack $scriptText -Needle 'Complete-SourceCleanupAfterAclSync' -Message 'Expected source cleanup to wait for ACL synchronization.'
 
 Assert-Contains -Haystack $readmeText -Needle 'Windows VM' -Message 'Expected README to document that this is a Windows VM-side migration script.'
 Assert-Contains -Haystack $readmeText -Needle 'staged temporary file' -Message 'Expected README to document staged-copy behavior.'
 Assert-Contains -Haystack $readmeText -Needle 'existing destination file is preserved' -Message 'Expected README to document existing destination preservation on failed updates.'
+Assert-Contains -Haystack $readmeText -Needle 'ACL Bootstrap' -Message 'Expected README to document ACL synchronization for existing profile items.'
 
 Write-Output 'ANF-Move-AVD-Profiles static checks passed.'

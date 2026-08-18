@@ -35,7 +35,7 @@ This is not deployed to Azure Automation because the copy process must run from 
 - **Profile-in-Use Detection**: Automatically skips profiles that contain `.metadata` files (indicating active use)
 - **BITS Transfer Technology**: Uses Background Intelligent Transfer Service for efficient file transfers
 - **Staged Destination Updates**: Copies to a staged temporary file first, validates it, then replaces the destination only after validation succeeds
-- **Metadata Preservation**: Copies timestamps, attributes, and NTFS ACLs from the source file to the destination file
+- **ACL and Metadata Preservation**: After data transfer, synchronizes NTFS ACLs, timestamps, and attributes for the destination root, every migrated profile directory, and every destination file whose content matches the source. This also corrects ACLs on files copied by earlier runs.
 - **Conflict Resolution Logic**: 
   - Overwrites destination files only if source files are more recently modified
   - Preserves newer profiles and prevents overwriting with older versions
@@ -100,6 +100,7 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 - **Non-Destructive Default**: Source files are preserved unless `-DeleteSourceAfterVerifiedCopy` is provided
 - **Verified Source Cleanup**: Optional source deletion requires matching destination size and SHA256 hash
 - **Staged Copy Safety**: Existing destination files are not overwritten until the staged temporary file is copied and validated; source metadata is applied to the final destination before source cleanup is allowed
+- **ACL Bootstrap**: Applies the source ACL and metadata to each profile directory (including empty directories) and to already-copied files after content validation. Files with different source and destination content are left unchanged and reported for manual resolution.
 - **Destination Restore**: If replacement validation fails, the previous destination file is restored when one existed
 - **Profile Lock Detection**: Automatically skips profiles with active `.metadata` files
 - **Conflict Logging**: Clear console output showing all actions taken
@@ -124,12 +125,13 @@ Remove `-DryRun` to copy/update the destination. Add `-DeleteSourceAfterVerified
 - Designed to work with FSLogix multi-path configurations
 - Supports Profile Container and Office Container scenarios  
 - Compatible with both user profiles and application data
-- Maintains NTFS permissions and ACLs during transfer
+- Synchronizes NTFS permissions and ACLs for profile directories and content-validated files. The source and destination must use identities resolvable by the same Active Directory domain.
 - Preserves file timestamps and metadata
 
 ## Troubleshooting
 - **Slow Transfers**: Check network bandwidth between source and ANF
 - **Permission Errors**: Verify service account has full access to both shares
+- **ACL Synchronization Errors**: Verify the migration identity can read source ACLs and set ACLs on the ANF share. Source files are retained when ACL synchronization fails during `-DeleteSourceAfterVerifiedCopy`.
 - **Profile Corruption**: Review conflict resolution logs for manual intervention needs
 - **BITS Errors**: Ensure BITS service is running and properly configured
 
