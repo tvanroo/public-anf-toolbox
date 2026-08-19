@@ -21,7 +21,7 @@ the matching destination file validates by SHA256 hash and file size. Source dir
 that cutover mode is enabled and the directory is truly empty.
 
 Reruns:
-- Profiles containing .metadata files are skipped.
+- Profiles containing .metadata files are not copied; existing destination profile directories still receive ACL and metadata synchronization.
 - New files are copied and validated.
 - Source files newer than matching destination files are copied and validated.
 - Identical already-copied source files are left in place unless -DeleteSourceAfterVerifiedCopy is used.
@@ -421,7 +421,13 @@ function Sync-ProfilePermissions {
         [string]$SourceProfileDirectoryPath,
 
         [Parameter(Mandatory = $true)]
-        [string]$DestinationRootPath
+        [string]$DestinationRootPath,
+
+        [Parameter()]
+        [switch]$DirectoriesOnly,
+
+        [Parameter()]
+        [switch]$ExistingDestinationDirectoriesOnly
     )
 
     $sourceProfileRoot = Get-Item -LiteralPath $SourceProfileDirectoryPath -Force
@@ -431,8 +437,18 @@ function Sync-ProfilePermissions {
         foreach ($sourceDirectory in $sourceDirectories) {
             $relativePath = $sourceDirectory.FullName.Substring($resolvedSource.Length).TrimStart([char[]]@('\', '/'))
             $destinationDirectoryPath = Join-Path -Path $DestinationRootPath -ChildPath $relativePath
+            if ($ExistingDestinationDirectoriesOnly -and -not (Test-Path -LiteralPath $destinationDirectoryPath -PathType Container)) {
+                Write-Host "DRY RUN: Would skip ACL-only synchronization because destination directory is missing: $destinationDirectoryPath" -ForegroundColor DarkGray
+                $script:Summary.AclDirectoriesSkippedMissingDestination++
+                continue
+            }
+
             Write-Host "DRY RUN: Would synchronize ACL and metadata for directory: $destinationDirectoryPath" -ForegroundColor Yellow
             $script:Summary.AclDirectoriesPlanned++
+        }
+
+        if ($DirectoriesOnly) {
+            return
         }
 
         $sourceFiles = @(Get-ChildItem -LiteralPath $SourceProfileDirectoryPath -File -Recurse -Force | Where-Object { $_.Extension -ne '.metadata' })
@@ -452,6 +468,12 @@ function Sync-ProfilePermissions {
 
         try {
             if (-not (Test-Path -LiteralPath $destinationDirectoryPath -PathType Container)) {
+                if ($ExistingDestinationDirectoriesOnly) {
+                    Write-Host "Skipped ACL-only synchronization because destination directory is missing: $destinationDirectoryPath" -ForegroundColor DarkGray
+                    $script:Summary.AclDirectoriesSkippedMissingDestination++
+                    continue
+                }
+
                 Assert-DryRunMutationIsBlocked -Operation 'creating an empty destination directory'
                 New-Item -Path $destinationDirectoryPath -ItemType Directory -Force | Out-Null
                 Write-Host "Created empty destination directory: $destinationDirectoryPath" -ForegroundColor Cyan
@@ -465,6 +487,10 @@ function Sync-ProfilePermissions {
             Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
             $script:Summary.AclSyncFailures++
         }
+    }
+
+    if ($DirectoriesOnly) {
+        return
     }
 
     $sourceFiles = @(Get-ChildItem -LiteralPath $SourceProfileDirectoryPath -File -Recurse -Force | Where-Object { $_.Extension -ne '.metadata' })
@@ -525,6 +551,7 @@ function Sync-RootDirectoryPermissions {
 function Complete-SourceCleanupAfterAclSync {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.IO.DirectoryInfo[]]$SourceProfileDirectories
     )
 
@@ -736,6 +763,7 @@ $script:Summary = [ordered]@{
     MetadataFailures = 0
     RestoreFailures = 0
     AclDirectoriesPlanned = 0
+    AclDirectoriesSkippedMissingDestination = 0
     AclFilesPlanned = 0
     AclSyncedDirectories = 0
     AclSyncedFiles = 0
@@ -746,6 +774,7 @@ $script:Summary = [ordered]@{
 
 $script:SourceFilesPendingDeletion = [System.Collections.Generic.List[string]]::new()
 $processedProfileDirectories = [System.Collections.Generic.List[System.IO.DirectoryInfo]]::new()
+$inUseProfileDirectories = [System.Collections.Generic.List[System.IO.DirectoryInfo]]::new()
 $directories = @(Get-ChildItem -LiteralPath $resolvedSource -Directory -Force)
 
 foreach ($directory in $directories) {
@@ -759,6 +788,7 @@ foreach ($directory in $directories) {
     if ($metadataFiles.Count -gt 0) {
         Write-Host "Skipped directory (profile in use or metadata present): $($directory.FullName)" -ForegroundColor DarkGray
         $script:Summary.DirectoriesSkippedInUse++
+        $inUseProfileDirectories.Add($directory)
         continue
     }
 
@@ -801,6 +831,11 @@ foreach ($directory in $directories) {
 
 foreach ($directory in $processedProfileDirectories) {
     Sync-ProfilePermissions -SourceProfileDirectoryPath $directory.FullName -DestinationRootPath $resolvedDestination
+}
+
+foreach ($directory in $inUseProfileDirectories) {
+    Write-Host "Synchronizing directory ACLs only for in-use profile; profile content remains untouched: $($directory.FullName)" -ForegroundColor DarkGray
+    Sync-ProfilePermissions -SourceProfileDirectoryPath $directory.FullName -DestinationRootPath $resolvedDestination -DirectoriesOnly -ExistingDestinationDirectoriesOnly
 }
 
 Sync-RootDirectoryPermissions -SourceRootPath $resolvedSource -DestinationRootPath $resolvedDestination

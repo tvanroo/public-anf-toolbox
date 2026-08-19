@@ -32,7 +32,7 @@ This is not deployed to Azure Automation because the copy process must run from 
 
 ## Key Features
 - **Intelligent File Comparison**: Compares creation and modification dates to resolve conflicts intelligently
-- **Profile-in-Use Detection**: Automatically skips profiles that contain `.metadata` files (indicating active use)
+- **Profile-in-Use Detection**: Skips copying profiles that contain `.metadata` files (indicating active use), while still synchronizing directory ACLs on their existing destination counterparts. No profile content is copied and no missing destination directories are created for in-use profiles.
 - **BITS Transfer Technology**: Uses Background Intelligent Transfer Service for efficient file transfers
 - **Staged Destination Updates**: Copies to a staged temporary file first, validates it, then replaces the destination only after validation succeeds
 - **ACL and Metadata Preservation**: After data transfer, synchronizes NTFS ACLs, timestamps, and attributes for the destination root, every migrated profile directory, and every destination file whose content matches the source. This also corrects ACLs on files copied by earlier runs.
@@ -47,7 +47,7 @@ This is not deployed to Azure Automation because the copy process must run from 
 ## Migration Logic
 The script follows this intelligent decision tree for each file:
 
-1. **Check Profile Usage**: Skip entire profile if `.metadata` file exists (profile in use)
+1. **Check Profile Usage**: If a `.metadata` file exists (profile in use), skip all content copying and synchronize ACLs only on matching existing destination directories
 2. **File Existence Check**: 
    - If destination file doesn't exist → Copy source to destination
    - If destination file exists → Apply conflict resolution logic
@@ -103,7 +103,7 @@ Remove `-DryRun` to copy/update the destination. `-DryRun` is a fail-closed safe
 - **ACL Bootstrap**: Applies the source ACL and metadata to each profile directory (including empty directories) and to already-copied files after content validation. Files with different source and destination content are left unchanged and reported for manual resolution.
 - **Inherited ACL Materialization**: When source permissions are inherited from a different parent, the effective source permissions are written as explicit destination entries. This prevents the destination from silently retaining unrelated inherited permissions such as `Everyone`.
 - **Destination Restore**: If replacement validation fails, the previous destination file is restored when one existed
-- **Profile Lock Detection**: Automatically skips profiles with active `.metadata` files
+- **Profile Lock Detection**: Profiles with active `.metadata` files are not copied; their existing destination directories still receive ACL and metadata synchronization so inherited root-only user permissions are retained
 - **Conflict Logging**: Clear console output showing all actions taken
 - **Preservation Logic**: Prevents overwriting newer profiles with older versions
 - **Manual Resolution Flags**: Identifies conflicts requiring administrator attention
