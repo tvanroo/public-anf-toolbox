@@ -9,17 +9,17 @@ This repository is published publicly as a resource for other Azure NetApp Files
 By using any content from this repository, you acknowledge that you do so at your own risk and that you are solely responsible for any consequences that may arise.
 *********************** WARNING: UNSUPPORTED SCRIPT. USE AT YOUR OWN RISK. ************************
 
-Last Edit Date: 07/02/2026
+Last Edit Date: 10/07/2026
 https://github.com/tvanroo/public-anf-toolbox
 Author: Toby vanRoojen - toby.vanroojen (at) netapp.com
 
 Script Purpose:
-Collect historical Azure NetApp Files volume throughput metrics and export the data to CSV.
+Collect historical Azure NetApp Files volume throughput and capacity metrics and export the data to CSV.
 This script is read-only. It does not resize pools, resize volumes, change QoS, or modify ANF resources.
 
 Supported targets:
 - Standard, Premium, Ultra, and Flexible Service Level capacity pools.
-- All visible ANF capacity pools discovered from the authenticated Azure context by default.
+- All visible ANF capacity pools in the selected subscriptions of one tenant.
 - One or more explicit capacity pools, optionally supplied as full Resource IDs.
 - Optional account, pool, and volume text filters.
 
@@ -30,7 +30,7 @@ Required:
 
 Optional:
 - ANF_TenantId: Azure tenant ID. If omitted, the current Azure context tenant is used.
-- ANF_SubscriptionId: Optional subscription ID or name used for discovery. If omitted and multiple active subscriptions are visible, local runs prompt for one.
+- ANF_SubscriptionId: Subscription IDs or exact names separated by commas, semicolons, or newlines; All selects every active subscription in the tenant. Local runs prompt for one or more when omitted.
 - ANF_CapacityPoolResourceId: Optional explicit capacity pool Resource IDs separated by new lines, semicolons, or commas.
 - ANF_AccountNameFilter: Optional account name text filter. Multiple values can be separated by new lines, semicolons, or commas.
 - ANF_PoolNameFilter: Optional capacity pool name text filter. Multiple values can be separated by new lines, semicolons, or commas.
@@ -38,7 +38,10 @@ Optional:
 - ANF_LookBackDays: Metric lookback in days. Default: 30.
 - ANF_TimeGrainMinutes: Metric interval in minutes. Default: 5.
 - ANF_OutputPath: CSV output path. Default: timestamped ./ANF-throughput-metrics-<yyyyMMdd-HHmmssZ>.csv.
-- ANF_OverwriteOutput: Yes/No overwrite guard for existing CSV output. Default: No.
+- ANF_OverwriteOutput: Yes/No overwrite guard for both CSV outputs. Default: No.
+
+A companion <output-name>.volumes.csv lists every matched volume with its current quota,
+latest used-capacity sample and timestamp, and metric collection status.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -231,14 +234,17 @@ $accountNameFilters = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_A
 $poolNameFilters = @(Split-AnfSettingList -Value (Get-AnfSetting -Name "ANF_PoolNameFilter" -Default ""))
 $volumeNameFilterSetting = Get-AnfSetting -Name "ANF_VolumeNameFilter" -Default (Get-AnfSetting -Name "ANF_VolumeName" -Default "")
 $volumeNameFilters = @(Split-AnfSettingList -Value $volumeNameFilterSetting)
-$metricNames = "ReadThroughput,WriteThroughput,TotalThroughput,OtherThroughput,throughputLimitReached"
+$metricNames = "ReadThroughput,WriteThroughput,TotalThroughput,OtherThroughput,throughputLimitReached,VolumeAllocatedSize,VolumeLogicalSize"
+$volumeOutputPath = [System.IO.Path]::ChangeExtension($outputPath, "volumes.csv")
 
 if (-not (Test-AnfYes -Value $overwriteOutput) -and -not "$overwriteOutput".Trim().Equals("No", [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "ANF_OverwriteOutput must be Yes or No. Current value: '$overwriteOutput'"
 }
 
-if ((Test-Path -LiteralPath $outputPath) -and -not (Test-AnfYes -Value $overwriteOutput)) {
-    throw "Output file already exists: $outputPath. Set ANF_OverwriteOutput to Yes or choose a different ANF_OutputPath."
+foreach ($path in @($outputPath, $volumeOutputPath)) {
+    if ((Test-Path -LiteralPath $path) -and -not (Test-AnfYes -Value $overwriteOutput)) {
+        throw "Output file already exists: $path. Set ANF_OverwriteOutput to Yes or choose a different ANF_OutputPath."
+    }
 }
 
 Write-Output "=== ANF Throughput Metrics Collector Configuration ==="
@@ -258,6 +264,7 @@ Write-Output "Metrics: $metricNames"
 Write-Output "Lookback: $lookBackDays day(s)"
 Write-Output "Interval: $timeGrainMinutes minute(s)"
 Write-Output "Output Path: $outputPath"
+Write-Output "Volume Summary Path: $volumeOutputPath"
 Write-Output "Overwrite Output: $overwriteOutput"
 
 $anfApiVersion = "2026-04-01"
@@ -448,26 +455,22 @@ function Select-AnfDiscoverySubscriptions {
         [Parameter()][string[]]$SubscriptionSelections = @()
     )
 
+    if ($SubscriptionSelections.Count -eq 1 -and $SubscriptionSelections[0] -eq 'All') {
+        return @($Subscriptions)
+    }
     if ($SubscriptionSelections.Count -gt 0) {
-        $matchedSubscriptions = @($Subscriptions | Where-Object {
-            $subscriptionId = Get-AnfSubscriptionIdFromObject -Subscription $_
-            $subscriptionName = Get-AnfSubscriptionNameFromObject -Subscription $_
-            $isMatch = $false
-            foreach ($selection in $SubscriptionSelections) {
-                if ($subscriptionId.Equals($selection, [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $subscriptionName.Equals($selection, [System.StringComparison]::OrdinalIgnoreCase)) {
-                    $isMatch = $true
-                    break
-                }
+        $matchedSubscriptions = @()
+        foreach ($selection in $SubscriptionSelections) {
+            $matchesForSelection = @($Subscriptions | Where-Object {
+                (Get-AnfSubscriptionIdFromObject -Subscription $_) -eq $selection -or
+                (Get-AnfSubscriptionNameFromObject -Subscription $_) -eq $selection
+            })
+            if ($matchesForSelection.Count -ne 1) {
+                throw "ANF_SubscriptionId '$selection' must match exactly one active subscription in the selected tenant. Use its ID if names are ambiguous."
             }
-            $isMatch
-        })
-
-        if ($matchedSubscriptions.Count -eq 0) {
-            throw "ANF_SubscriptionId did not match any visible active subscription by ID or name: $($SubscriptionSelections -join ', ')"
+            $matchedSubscriptions += $matchesForSelection
         }
-
-        return @($matchedSubscriptions)
+        return @($matchedSubscriptions | Sort-Object { Get-AnfSubscriptionIdFromObject -Subscription $_ } -Unique)
     }
 
     if ($Subscriptions.Count -le 1) {
@@ -492,51 +495,44 @@ function Select-AnfDiscoverySubscriptions {
 
     $subscriptionPromptLines = [System.Collections.Generic.List[string]]::new()
     $subscriptionPromptLines.Add("")
-    $subscriptionPromptLines.Add("Multiple active Azure subscriptions are visible. Select one for ANF discovery:")
+    $subscriptionPromptLines.Add("Multiple active Azure subscriptions are visible. Select one or more for ANF discovery:")
     for ($index = 0; $index -lt $Subscriptions.Count; $index++) {
         $subscription = $Subscriptions[$index]
         $subscriptionPromptLines.Add(("  [{0}] {1} ({2})" -f ($index + 1), (Get-AnfSubscriptionNameFromObject -Subscription $subscription), (Get-AnfSubscriptionIdFromObject -Subscription $subscription)))
     }
-    $subscriptionPromptLines.Add("Enter subscription number")
+    $subscriptionPromptLines.Add("Enter subscription numbers separated by commas, or All")
     $subscriptionPrompt = $subscriptionPromptLines -join [Environment]::NewLine
 
     while ($true) {
         $selection = Read-Host $subscriptionPrompt
-        $selectionNumber = 0
-        if ([int]::TryParse($selection, [ref]$selectionNumber) -and $selectionNumber -ge 1 -and $selectionNumber -le $Subscriptions.Count) {
-            return @($Subscriptions[$selectionNumber - 1])
+        if ($selection.Trim() -eq 'All') { return @($Subscriptions) }
+        $numbers = @(Split-AnfSettingList -Value $selection)
+        $selected = @()
+        $valid = $numbers.Count -gt 0
+        foreach ($number in $numbers) {
+            $selectionNumber = 0
+            if ([int]::TryParse($number, [ref]$selectionNumber) -and $selectionNumber -ge 1 -and $selectionNumber -le $Subscriptions.Count) {
+                $selected += $Subscriptions[$selectionNumber - 1]
+            } else { $valid = $false }
         }
-
-        Write-Warning "Invalid selection '$selection'. Enter a number from 1 to $($Subscriptions.Count)."
+        if ($valid) {
+            return @($selected | Sort-Object { Get-AnfSubscriptionIdFromObject -Subscription $_ } -Unique)
+        }
+        Write-Warning "Invalid selection '$selection'. Enter numbers from 1 to $($Subscriptions.Count), or All."
     }
 }
 
 function Get-AnfDiscoverySubscriptions {
     param([Parameter()][string[]]$SubscriptionSelections = @())
 
-    $subscriptions = @()
-    try {
-        $subscriptions = @(Get-AzSubscription -ErrorAction Stop | Where-Object {
-            -not $_.State -or "$($_.State)".Equals("Enabled", [System.StringComparison]::OrdinalIgnoreCase)
-        })
-    } catch {
-        Write-Warning "Unable to enumerate Azure subscriptions; falling back to the current context subscription. $($_.Exception.Message)"
-    }
-
-    if ($subscriptions.Count -gt 0) {
-        return @(Select-AnfDiscoverySubscriptions -Subscriptions $subscriptions -SubscriptionSelections $SubscriptionSelections)
-    }
-
-    $context = Get-AzContext -ErrorAction Stop
-    if (-not $context.Subscription -or -not $context.Subscription.Id) {
-        throw "Unable to resolve a subscription for ANF discovery. Set an Azure context or provide ANF_CapacityPoolResourceId."
-    }
-
-    return @([PSCustomObject]@{
-        Id = $context.Subscription.Id
-        Name = $context.Subscription.Name
-        State = "Current"
+    # Fail closed: a failed enumeration must not silently discard requested subscriptions.
+    $subscriptions = @(Get-AzSubscription -TenantId $tenantId -ErrorAction Stop | Where-Object {
+        -not $_.State -or "$($_.State)".Equals("Enabled", [System.StringComparison]::OrdinalIgnoreCase)
     })
+    if ($subscriptions.Count -eq 0) {
+        throw "No active subscriptions are visible in tenant '$tenantId'."
+    }
+    return @(Select-AnfDiscoverySubscriptions -Subscriptions $subscriptions -SubscriptionSelections $SubscriptionSelections)
 }
 
 function Get-AnfDiscoveredCapacityPoolTargets {
@@ -560,7 +556,7 @@ function Get-AnfDiscoveredCapacityPoolTargets {
         }
 
         try {
-            $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+            $null = Set-AzContext -SubscriptionId $subscriptionId -TenantId $tenantId -ErrorAction Stop
             Write-Host "Scanning subscription: $subscriptionName ($subscriptionId)"
             $accountResourceId = "/subscriptions/$subscriptionId/providers/Microsoft.NetApp/netAppAccounts"
             $accounts = @(Get-AnfArmListValues -ResourceId $accountResourceId -ApiVersion $anfApiVersion)
@@ -753,6 +749,11 @@ try {
     }
 
     $context = Get-AzContext
+    if ($tenantId -and $context.Tenant.Id -ne $tenantId) {
+        throw "Authenticated tenant does not match ANF_TenantId."
+    }
+    $tenantId = "$($context.Tenant.Id)"
+    if (-not $tenantId) { throw "Unable to resolve the authenticated tenant." }
     Write-Output "Azure Context: $($context.Account.Id) in subscription $($context.Subscription.Name)"
 } catch {
     Write-Error "Failed to authenticate to Azure: $_"
@@ -778,6 +779,7 @@ foreach ($anfTarget in $anfTargets) {
 $endTimeUtc = (Get-Date).ToUniversalTime()
 $startTimeUtc = $endTimeUtc.AddDays(-$lookBackDays)
 $allMetricsData = @()
+$volumeSummaries = @()
 $failedCapacityPools = @()
 
 foreach ($anfTarget in $anfTargets) {
@@ -792,7 +794,7 @@ try {
     Write-Output "Processing capacity pool: $($anfTarget.CapacityPoolResourceId)"
 
     try {
-        $null = Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+        $null = Set-AzContext -SubscriptionId $subscriptionId -TenantId $tenantId -ErrorAction Stop
     } catch {
         throw "Failed to set Azure context to target subscription '$subscriptionId': $($_.Exception.Message)"
     }
@@ -819,16 +821,48 @@ try {
     Write-Output "Collecting $metricNames from $($anfVolumes.Count) volume(s), $($startTimeUtc.ToString('u')) through $($endTimeUtc.ToString('u'))"
     foreach ($anfVolume in $anfVolumes) {
         Write-Output "Collecting metrics for volume '$($anfVolume.Name)'..."
+        $summary = [PSCustomObject]@{
+            CollectedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            SubscriptionId = $subscriptionId
+            ResourceGroup = $resourceGroupName
+            ANFAccount = $anfAccountName
+            ANFPool = $anfPoolName
+            ServiceLevel = $serviceLevel
+            QoSType = $qosType
+            VolumeName = $anfVolume.Name
+            VolumeId = $anfVolume.Id
+            AllocatedBytes = $anfVolume.Raw.properties.usageThreshold
+            AllocatedGiB = if ($null -ne $anfVolume.Raw.properties.usageThreshold) { [math]::Round(($anfVolume.Raw.properties.usageThreshold / 1GB), 3) } else { $null }
+            UsedBytes = $null
+            UsedGiB = $null
+            UsedMetricTimestamp = $null
+            MetricsStatus = 'NoData'
+            MetricsError = $null
+        }
+        $volumeSummaries += $summary
         try {
             $metricResponse = Get-AnfMetricSeries -ResourceId $anfVolume.Id -MetricNames $metricNames -StartTimeUtc $startTimeUtc -EndTimeUtc $endTimeUtc -TimeGrainMinutes $timeGrainMinutes
             foreach ($metric in @($metricResponse.value)) {
                 $metricName = "$(Get-AnfObjectProperty -InputObject $metric.name -PropertyNames @('value', 'Value', 'localizedValue', 'LocalizedValue'))"
                 $metricUnit = Get-AnfObjectProperty -InputObject $metric -PropertyNames @('unit', 'Unit')
+                if ($metric.errorCode -and $metric.errorCode -ne 'Success') {
+                    $summary.MetricsStatus = 'PartialFailure'
+                    $summary.MetricsError = "$($summary.MetricsError) $metricName`: $($metric.errorCode) $($metric.errorMessage)".Trim()
+                    continue
+                }
+                $isCapacityMetric = $metricName -in @('VolumeAllocatedSize', 'VolumeLogicalSize')
                 $isThroughputMetric = Test-AnfThroughputMetric -MetricName $metricName
                 foreach ($timeSeries in @($metric.timeseries)) {
                     foreach ($dataPoint in @($timeSeries.data)) {
                         if ($null -ne $dataPoint.average) {
                             $averageValue = [double]$dataPoint.average
+                            if ($summary.MetricsStatus -eq 'NoData') { $summary.MetricsStatus = 'Collected' }
+                            if ($metricName -eq 'VolumeLogicalSize' -and
+                                ($null -eq $summary.UsedMetricTimestamp -or [datetimeoffset]$dataPoint.timeStamp -gt [datetimeoffset]$summary.UsedMetricTimestamp)) {
+                                $summary.UsedBytes = $averageValue
+                                $summary.UsedGiB = [math]::Round(($averageValue / 1GB), 3)
+                                $summary.UsedMetricTimestamp = $dataPoint.timeStamp
+                            }
                             $allMetricsData += [PSCustomObject]@{
                                 Timestamp = $dataPoint.timeStamp
                                 SubscriptionId = $subscriptionId
@@ -840,10 +874,12 @@ try {
                                 VolumeName = $anfVolume.Name
                                 VolumeId = $anfVolume.Id
                                 MetricName = $metricName
-                                MetricUnit = if ($metricUnit) { $metricUnit } elseif ($isThroughputMetric) { "BytesPerSecond" } else { "Value" }
+                                MetricUnit = if ($metricUnit) { $metricUnit } elseif ($isThroughputMetric) { "BytesPerSecond" } elseif ($isCapacityMetric) { "Bytes" } else { "Value" }
                                 AverageValue = [math]::Round($averageValue, 3)
                                 AverageBytesPerSecond = if ($isThroughputMetric) { [math]::Round($averageValue, 3) } else { $null }
                                 AverageMiBps = if ($isThroughputMetric) { [math]::Round(($averageValue / 1024 / 1024), 3) } else { $null }
+                                AverageBytes = if ($isCapacityMetric) { [math]::Round($averageValue, 3) } else { $null }
+                                AverageGiB = if ($isCapacityMetric) { [math]::Round(($averageValue / 1GB), 3) } else { $null }
                                 TimeGrainMinutes = $timeGrainMinutes
                             }
                         }
@@ -851,27 +887,19 @@ try {
                 }
             }
         } catch {
+            $summary.MetricsStatus = 'Failed'
+            $summary.MetricsError = $_.Exception.Message
             Write-Warning "Failed collecting metrics for volume '$($anfVolume.Name)': $($_.Exception.Message)"
         }
     }
 }
 catch {
-    Write-Error "Failed processing capacity pool '$($anfTarget.CapacityPoolResourceId)': $($_.Exception.Message)"
+    Write-Warning "Failed processing capacity pool '$($anfTarget.CapacityPoolResourceId)': $($_.Exception.Message)"
     $failedCapacityPools += [PSCustomObject]@{
         CapacityPoolResourceId = $anfTarget.CapacityPoolResourceId
         Error = $_.Exception.Message
     }
 }
-}
-
-if ($failedCapacityPools.Count -gt 0) {
-    Write-Error "One or more capacity pools failed: $($failedCapacityPools.CapacityPoolResourceId -join ', ')"
-    throw "ANF throughput metrics collection failed for $($failedCapacityPools.Count) pool(s)."
-}
-
-if ($allMetricsData.Count -eq 0) {
-    Write-Warning "No metrics data was collected. Check discovery scope, filters, metric availability, and RBAC permissions."
-    return
 }
 
 $outputDirectory = Split-Path -Path $outputPath -Parent
@@ -887,9 +915,26 @@ if (Test-AnfYes -Value $overwriteOutput) {
     $exportParams.Force = $true
 }
 
-$allMetricsData | Sort-Object Timestamp, ANFAccount, ANFPool, VolumeName, MetricName | Export-Csv @exportParams
+if ($allMetricsData.Count -gt 0) {
+    $allMetricsData | Sort-Object Timestamp, SubscriptionId, ANFAccount, ANFPool, VolumeName, MetricName | Export-Csv @exportParams
+} else {
+    Write-Warning "No metrics data was collected; only the volume summary will be exported if volumes were found."
+}
+$exportParams.Path = $volumeOutputPath
+if ($volumeSummaries.Count -gt 0) {
+    $volumeSummaries | Sort-Object SubscriptionId, ANFAccount, ANFPool, VolumeName | Export-Csv @exportParams
+    Write-Output "Volume summary exported to: $volumeOutputPath"
+}
+if ($failedCapacityPools.Count -gt 0) {
+    throw "Collection incomplete. Failed pools: $($failedCapacityPools.CapacityPoolResourceId -join ', '). Available results were exported."
+}
+$metricFailures = @($volumeSummaries | Where-Object { $_.MetricsStatus -in @('Failed', 'PartialFailure') })
+if ($metricFailures.Count -gt 0) {
+    throw "Collection incomplete for $($metricFailures.Count) volume(s). See MetricsStatus and MetricsError in $volumeOutputPath."
+}
+if ($allMetricsData.Count -eq 0) { return }
 
-$uniqueVolumes = @($allMetricsData | Select-Object -ExpandProperty VolumeId -Unique).Count
+$uniqueVolumes = @($volumeSummaries | Select-Object -ExpandProperty VolumeId -Unique).Count
 $dateRange = $allMetricsData | Measure-Object -Property Timestamp -Minimum -Maximum
 Write-Output ""
 Write-Output "Metrics collection completed successfully."
