@@ -105,9 +105,14 @@ try {
             Assert ($used[0].UsedMetricTimestamp -eq '2026-10-07T01:05:00Z') 'Latest non-null usage must win, regardless of sample order.'
             Assert (($summary | Where-Object VolumeName -eq 'empty')[0].UsedBytes -eq '') 'Missing usage must remain blank.'
             $rows = @(Import-Csv $env:ANF_OutputPath)
+            $consumed = @($rows | Where-Object MetricName -eq 'VolumeConsumedSize')
+            Assert ($consumed.Count -eq 4 -and $consumed[0].ApiMetricName -eq 'VolumeLogicalSize') 'Consumed capacity must use the requested CSV label and retain the Azure API name.'
             $capacity = @($rows | Where-Object MetricName -eq 'VolumeAllocatedSize')
             Assert ($capacity[0].AverageGiB -eq '2' -and $capacity[0].AverageMiBps -eq '') 'Capacity history must not be converted to throughput.'
             $throughput = @($rows | Where-Object MetricName -eq 'ReadThroughput')
+            Assert ($throughput[0].VolumeAllocatedSize -eq '2147483648' -and $throughput[0].VolumeConsumedSize -eq '1073741824') 'Throughput rows must include capacity values joined by timestamp.'
+            $zeroRows = @($rows | Where-Object { $_.MetricName -eq 'VolumeConsumedSize' -and $_.AverageBytes -eq '0' })
+            Assert ($zeroRows[0].VolumeConsumedSize -eq '0' -and $zeroRows[0].VolumeAllocatedSize -eq '') 'Missing matching allocation must stay blank while measured zero consumption is preserved.'
             Assert ($throughput[0].AverageMiBps -eq '1' -and $throughput[0].AverageGiB -eq '') 'Throughput conversion must remain intact.'
         }
         if ($scenario -eq 'NoData') { Assert (-not (Test-Path $env:ANF_OutputPath)) 'No-data runs should only write the summary.' }

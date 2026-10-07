@@ -55,7 +55,7 @@ After the script is downloaded, you can change only the `ANF_*` environment vari
 - `OtherThroughput`
 - `throughputLimitReached`
 - `VolumeAllocatedSize` (historical provisioned capacity)
-- `VolumeLogicalSize` (historical used bytes)
+- `VolumeConsumedSize` (historical consumed capacity; requested from Azure as `VolumeLogicalSize`)
 
 Throughput metrics are exported in bytes per second and MiB/s. `throughputLimitReached` is exported as its average metric value and is not converted to MiB/s.
 
@@ -121,7 +121,10 @@ $env:ANF_SubscriptionId = "<subscription-id-1>;<subscription-id-2>" # or "All"
 - `QoSType`
 - `VolumeName`
 - `VolumeId`
-- `MetricName`
+- `MetricName` (CSV label, including `VolumeConsumedSize` and `VolumeAllocatedSize`)
+- `ApiMetricName` (original Azure API name; `VolumeLogicalSize` for consumed capacity)
+- `VolumeAllocatedSize` (allocated bytes, averaged over this row’s timestamp interval)
+- `VolumeConsumedSize` (consumed bytes, averaged over this row’s timestamp interval)
 - `MetricUnit`
 - `AverageValue`
 - `AverageBytesPerSecond`
@@ -130,7 +133,7 @@ $env:ANF_SubscriptionId = "<subscription-id-1>;<subscription-id-2>" # or "All"
 - `AverageGiB` (capacity metrics only)
 - `TimeGrainMinutes`
 
-The metrics CSV retains one row per metric and timestamp. A companion `<output-name>.volumes.csv` contains one row for every enumerated volume that passes the optional filters, even when metrics are missing or fail:
+The metrics CSV retains one row per metric and timestamp, with explicit `VolumeAllocatedSize` and `VolumeConsumedSize` columns alongside every metric row. Both columns contain bytes from capacity samples at the same timestamp and remain blank when the corresponding sample is unavailable. They never substitute current quota or a sample from a different time. Filter `MetricName` to `VolumeConsumedSize` or `VolumeAllocatedSize` and read `AverageBytes` or `AverageGiB` for their historical values. Azure’s REST API calls Volume Consumed Size `VolumeLogicalSize`; `ApiMetricName` preserves that original name. A companion `<output-name>.volumes.csv` contains one row for every enumerated volume that passes the optional filters, even when metrics are missing or fail:
 
 - Resource identity and pool service level / QoS.
 - `CollectedAtUtc`, `AllocatedBytes`, `AllocatedGiB`: current configured quota from the volume resource (`usageThreshold`), not a historical value.

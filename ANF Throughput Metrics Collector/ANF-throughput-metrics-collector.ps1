@@ -842,6 +842,23 @@ try {
         $volumeSummaries += $summary
         try {
             $metricResponse = Get-AnfMetricSeries -ResourceId $anfVolume.Id -MetricNames $metricNames -StartTimeUtc $startTimeUtc -EndTimeUtc $endTimeUtc -TimeGrainMinutes $timeGrainMinutes
+            # Join capacity samples by timestamp, never by array position or latest value.
+            $capacityByTimestamp = @{}
+            foreach ($capacityMetric in @($metricResponse.value)) {
+                $capacityApiName = "$($capacityMetric.name.value)"
+                if ($capacityApiName -notin @('VolumeAllocatedSize', 'VolumeLogicalSize') -or
+                    ($capacityMetric.errorCode -and $capacityMetric.errorCode -ne 'Success')) { continue }
+                foreach ($series in @($capacityMetric.timeseries)) {
+                    foreach ($point in @($series.data)) {
+                        if ($null -eq $point.average) { continue }
+                        $timestampKey = ([datetimeoffset]$point.timeStamp).ToUniversalTime().ToString('o')
+                        if (-not $capacityByTimestamp.ContainsKey($timestampKey)) {
+                            $capacityByTimestamp[$timestampKey] = @{}
+                        }
+                        $capacityByTimestamp[$timestampKey][$capacityApiName] = [double]$point.average
+                    }
+                }
+            }
             foreach ($metric in @($metricResponse.value)) {
                 $metricName = "$(Get-AnfObjectProperty -InputObject $metric.name -PropertyNames @('value', 'Value', 'localizedValue', 'LocalizedValue'))"
                 $metricUnit = Get-AnfObjectProperty -InputObject $metric -PropertyNames @('unit', 'Unit')
@@ -863,6 +880,8 @@ try {
                                 $summary.UsedGiB = [math]::Round(($averageValue / 1GB), 3)
                                 $summary.UsedMetricTimestamp = $dataPoint.timeStamp
                             }
+                            $timestampKey = ([datetimeoffset]$dataPoint.timeStamp).ToUniversalTime().ToString('o')
+                            $capacitySample = $capacityByTimestamp[$timestampKey]
                             $allMetricsData += [PSCustomObject]@{
                                 Timestamp = $dataPoint.timeStamp
                                 SubscriptionId = $subscriptionId
@@ -873,7 +892,11 @@ try {
                                 QoSType = $qosType
                                 VolumeName = $anfVolume.Name
                                 VolumeId = $anfVolume.Id
-                                MetricName = $metricName
+                                # Azure exposes Volume Consumed Size through the VolumeLogicalSize API metric.
+                                MetricName = if ($metricName -eq 'VolumeLogicalSize') { 'VolumeConsumedSize' } else { $metricName }
+                                ApiMetricName = $metricName
+                                VolumeAllocatedSize = if ($capacitySample) { $capacitySample['VolumeAllocatedSize'] } else { $null }
+                                VolumeConsumedSize = if ($capacitySample) { $capacitySample['VolumeLogicalSize'] } else { $null }
                                 MetricUnit = if ($metricUnit) { $metricUnit } elseif ($isThroughputMetric) { "BytesPerSecond" } elseif ($isCapacityMetric) { "Bytes" } else { "Value" }
                                 AverageValue = [math]::Round($averageValue, 3)
                                 AverageBytesPerSecond = if ($isThroughputMetric) { [math]::Round($averageValue, 3) } else { $null }
