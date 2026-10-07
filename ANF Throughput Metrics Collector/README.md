@@ -6,14 +6,20 @@ This read-only script exports historical Azure NetApp Files volume throughput an
 
 ## Cloud Shell / PowerShell Quick Start
 
-Copy this block as-is into Azure Cloud Shell PowerShell or a local PowerShell session. It downloads and prepares the current script from GitHub, then discovers ANF volumes in the selected subscription(s) in one tenant.
+Copy this block as-is into **Azure Cloud Shell PowerShell** (not Bash), or a local PowerShell session with `Az.Accounts` installed. No edits are required. It downloads the latest collector from GitHub `main`, collects **7 days of hourly averages**, and exports throughput plus **`VolumeAllocatedSize`** and **`VolumeConsumedSize`** in bytes.
+
+This example clears previous targeting filters and uses the authenticated tenant. When multiple subscriptions are available, select their menu numbers separated by commas, or enter `All`. It collects every volume in the discovered capacity pools.
 
 ```powershell
+$ErrorActionPreference = "Stop"
 $RepoRef = "main"
 $ScriptName = "ANF-throughput-metrics-collector.ps1"
 $DownloadStamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
 $ScriptPath = Join-Path (Get-Location) $ScriptName
 $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$RepoRef/ANF%20Throughput%20Metrics%20Collector/$ScriptName`?cacheBust=$DownloadStamp"
+
+# Clear targeting settings left over from earlier runs.
+Remove-Item Env:ANF_TenantId, Env:ANF_CapacityPoolResourceId, Env:ANF_SubscriptionId, Env:ANF_AccountNameFilter, Env:ANF_PoolNameFilter, Env:ANF_VolumeNameFilter, Env:ANF_VolumeName -ErrorAction SilentlyContinue
 
 # Optional filters. Leave these commented to collect every discovered ANF volume.
 # $env:ANF_SubscriptionId = "<subscription-id-1>;<subscription-id-2>" # or "All"
@@ -21,9 +27,11 @@ $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$Repo
 # $env:ANF_PoolNameFilter = "premium"
 # $env:ANF_VolumeNameFilter = "avd"
 
-# Optional collection settings.
-# $env:ANF_LookBackDays = "7"
-# $env:ANF_TimeGrainMinutes = "60" # hourly averages (default)
+# Collect seven days in hourly buckets, even if prior settings were different.
+$env:ANF_LookBackDays = "7"
+$env:ANF_TimeGrainMinutes = "60"
+$env:ANF_OutputPath = Join-Path (Get-Location) "ANF-metrics-$DownloadStamp.csv"
+$env:ANF_OverwriteOutput = "No"
 
 # Download and prep the script.
 $ProgressPreference = "SilentlyContinue"
@@ -41,9 +49,12 @@ if ($isWindowsPowerShellHost -and (Get-Command Unblock-File -ErrorAction Silentl
 & $ScriptPath
 ```
 
+The files are saved in your current directory: `ANF-metrics-<timestamp>.csv` contains the hourly metrics and explicit capacity columns; `ANF-metrics-<timestamp>.volumes.csv` contains one summary row per matched volume. In Cloud Shell, use **Manage files → Download** to download either file using the path printed by the collector.
+
 After the script is downloaded, you can change only the `ANF_*` environment variables and rerun the local copy:
 
 ```powershell
+$env:ANF_OutputPath = Join-Path (Get-Location) ("ANF-metrics-{0}.csv" -f (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ"))
 & ./ANF-throughput-metrics-collector.ps1
 ```
 
