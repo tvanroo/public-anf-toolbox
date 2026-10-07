@@ -40,6 +40,7 @@ function Invoke-AnfArmJson {
     param($Method, $ResourceId, $ApiVersion, $QueryString)
     Assert ($Method -eq 'GET') 'Collector must only read Azure resources.'
     if ($ResourceId -like '*/providers/microsoft.insights/metrics') {
+        Assert ($QueryString -match 'interval=PT1H&aggregation=Average') 'Default collection must request hourly average buckets.'
         Assert ($QueryString -match 'VolumeAllocatedSize' -and $QueryString -match 'VolumeLogicalSize') 'Capacity metrics must be requested.'
         if ($ResourceId -like '*/empty/*' -or $script:scenario -eq 'NoData') { return [pscustomobject]@{value=@()} }
         if ($script:scenario -eq 'Failure' -and $ResourceId -like '*/zero/*') { throw 'Synthetic metric failure' }

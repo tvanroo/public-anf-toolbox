@@ -23,7 +23,7 @@ $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$Repo
 
 # Optional collection settings.
 # $env:ANF_LookBackDays = "30"
-# $env:ANF_TimeGrainMinutes = "5"
+# $env:ANF_TimeGrainMinutes = "60" # hourly averages (default)
 
 # Download and prep the script.
 $ProgressPreference = "SilentlyContinue"
@@ -76,7 +76,7 @@ Set these as environment variables before running from Cloud Shell or a local Po
 | `ANF_PoolNameFilter` | all pools | Optional capacity pool name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_VolumeNameFilter` | all volumes | Optional volume name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_LookBackDays` | `30` | Number of trailing days to request from Azure Monitor. |
-| `ANF_TimeGrainMinutes` | `5` | Metric interval in minutes. |
+| `ANF_TimeGrainMinutes` | `60` | Hourly averages by default. Azure Monitor buckets the data before returning it; set another supported interval explicitly if needed. |
 | `ANF_OutputPath` | `./ANF-throughput-metrics-<timestamp>.csv` | CSV output path. The default includes a UTC timestamp such as `20260716-214530Z`. |
 | `ANF_OverwriteOutput` | `No` | `No` protects an existing output file. The timestamped default normally avoids collisions. Set to `Yes` only when intentionally reusing an output path. |
 
@@ -112,7 +112,7 @@ $env:ANF_SubscriptionId = "<subscription-id-1>;<subscription-id-2>" # or "All"
 
 ## Output Columns
 
-- `Timestamp`
+- `Timestamp` (bucket start; hourly by default)
 - `SubscriptionId`
 - `ResourceGroup`
 - `ANFAccount`
@@ -133,7 +133,7 @@ $env:ANF_SubscriptionId = "<subscription-id-1>;<subscription-id-2>" # or "All"
 - `AverageGiB` (capacity metrics only)
 - `TimeGrainMinutes`
 
-The metrics CSV retains one row per metric and timestamp, with explicit `VolumeAllocatedSize` and `VolumeConsumedSize` columns alongside every metric row. Both columns contain bytes from capacity samples at the same timestamp and remain blank when the corresponding sample is unavailable. They never substitute current quota or a sample from a different time. Filter `MetricName` to `VolumeConsumedSize` or `VolumeAllocatedSize` and read `AverageBytes` or `AverageGiB` for their historical values. Azure’s REST API calls Volume Consumed Size `VolumeLogicalSize`; `ApiMetricName` preserves that original name. A companion `<output-name>.volumes.csv` contains one row for every enumerated volume that passes the optional filters, even when metrics are missing or fail:
+Azure Monitor returns hourly averages by default, with `Timestamp` marking the start of each hour’s bucket. The metrics CSV retains one row per metric and timestamp, with explicit `VolumeAllocatedSize` and `VolumeConsumedSize` columns alongside every metric row. Both columns contain bytes from capacity samples at the same timestamp and remain blank when the corresponding sample is unavailable. They never substitute current quota or a sample from a different time. Filter `MetricName` to `VolumeConsumedSize` or `VolumeAllocatedSize` and read `AverageBytes` or `AverageGiB` for their historical values. Azure’s REST API calls Volume Consumed Size `VolumeLogicalSize`; `ApiMetricName` preserves that original name. A companion `<output-name>.volumes.csv` contains one row for every enumerated volume that passes the optional filters, even when metrics are missing or fail:
 
 - Resource identity and pool service level / QoS.
 - `CollectedAtUtc`, `AllocatedBytes`, `AllocatedGiB`: current configured quota from the volume resource (`usageThreshold`), not a historical value.
