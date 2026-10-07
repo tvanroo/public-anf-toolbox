@@ -35,7 +35,7 @@ Optional:
 - ANF_AccountNameFilter: Optional account name text filter. Multiple values can be separated by new lines, semicolons, or commas.
 - ANF_PoolNameFilter: Optional capacity pool name text filter. Multiple values can be separated by new lines, semicolons, or commas.
 - ANF_VolumeNameFilter: Optional volume name text filter. Multiple values can be separated by new lines, semicolons, or commas.
-- ANF_LookBackDays: Metric lookback in days. Default: 30.
+- ANF_LookBackDays: Metric lookback in days. Default: 7.
 - ANF_TimeGrainMinutes: Metric interval in minutes. Default: 60 (hourly averages).
 - ANF_OutputPath: CSV output path. Default: timestamped ./ANF-throughput-metrics-<yyyyMMdd-HHmmssZ>.csv.
 - ANF_OverwriteOutput: Yes/No overwrite guard for both CSV outputs. Default: No.
@@ -224,7 +224,7 @@ if ($capacityPoolResourceIdSetting) {
     $anfTargets = @(Resolve-AnfCapacityPoolResourceIds -CapacityPoolResourceIds $capacityPoolResourceIdSetting)
 }
 
-$lookBackDays = Convert-AnfSettingToInt -Name "ANF_LookBackDays" -Value (Get-AnfSetting -Name "ANF_LookBackDays" -Default 30) -Minimum 1
+$lookBackDays = Convert-AnfSettingToInt -Name "ANF_LookBackDays" -Value (Get-AnfSetting -Name "ANF_LookBackDays" -Default 7) -Minimum 1
 $timeGrainMinutes = Convert-AnfSettingToInt -Name "ANF_TimeGrainMinutes" -Value (Get-AnfSetting -Name "ANF_TimeGrainMinutes" -Default 60) -Minimum 1
 $runTimestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmssZ")
 $defaultOutputPath = "./ANF-throughput-metrics-$runTimestamp.csv"

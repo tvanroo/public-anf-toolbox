@@ -22,7 +22,7 @@ $ScriptUrl = "https://raw.githubusercontent.com/tvanroo/public-anf-toolbox/$Repo
 # $env:ANF_VolumeNameFilter = "avd"
 
 # Optional collection settings.
-# $env:ANF_LookBackDays = "30"
+# $env:ANF_LookBackDays = "7"
 # $env:ANF_TimeGrainMinutes = "60" # hourly averages (default)
 
 # Download and prep the script.
@@ -75,7 +75,7 @@ Set these as environment variables before running from Cloud Shell or a local Po
 | `ANF_AccountNameFilter` | all accounts | Optional account name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_PoolNameFilter` | all pools | Optional capacity pool name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
 | `ANF_VolumeNameFilter` | all volumes | Optional volume name text filter. Multiple values can be separated with new lines, semicolons, or commas. |
-| `ANF_LookBackDays` | `30` | Number of trailing days to request from Azure Monitor. |
+| `ANF_LookBackDays` | `7` | Number of trailing days to request from Azure Monitor. |
 | `ANF_TimeGrainMinutes` | `60` | Hourly averages by default. Azure Monitor buckets the data before returning it; set another supported interval explicitly if needed. |
 | `ANF_OutputPath` | `./ANF-throughput-metrics-<timestamp>.csv` | CSV output path. The default includes a UTC timestamp such as `20260716-214530Z`. |
 | `ANF_OverwriteOutput` | `No` | `No` protects an existing output file. The timestamped default normally avoids collisions. Set to `Yes` only when intentionally reusing an output path. |
