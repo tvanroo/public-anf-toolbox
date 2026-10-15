@@ -162,3 +162,26 @@ The authenticated identity needs read access to the ANF account and Azure Monito
 - New or inactive volumes may have fewer data points than the requested lookback window.
 - Large lookback windows and small intervals can produce large CSV files.
 - The script uses ARM REST calls and only requires `Az.Accounts`.
+
+## Agent handoff — 2026-10-15
+
+Status: stopped. Collector implementation and the paste-and-run example are published on `main` through [b5fa904faeddc5343e319f315a952738d05f742e](https://github.com/tvanroo/public-anf-toolbox/commit/b5fa904faeddc5343e319f315a952738d05f742e). No further implementation is authorized by this handoff.
+
+Completed scope:
+
+- Explicit capacity pool targeting enumerates all matching volumes; subscription discovery accepts multiple IDs/names or `All` within one tenant.
+- Historical allocated and consumed capacity are included as explicit `VolumeAllocatedSize` and `VolumeConsumedSize` byte columns, joined to each metric row by timestamp. Azure's consumed-capacity API name remains `VolumeLogicalSize`, preserved in `ApiMetricName`.
+- Defaults are seven trailing days and hourly averages. Output remains one row per metric per interval, not one combined row per volume/hour.
+- A companion volume summary retains enumerated volumes without metric samples and reports collection failures. Current quota and latest consumed sample are distinguished from historical averages.
+- The quick start downloads from GitHub `main`, resets earlier targeting filters, sets seven days/hourly collection, and writes timestamped CSVs.
+
+Publication history: `c4f41f3` added capacity and multi-subscription support; `8b6f4d0` added explicit capacity columns; `24a8b20` set hourly averages; `3a713c4` set seven days; `b5fa904` updated the quick start. These were pushed directly to `main` under the owner's earlier authorization; no feature PR was created. This handoff is documentation-only on `bark/anf-collector-handoff-20261015` and must not be merged without owner authorization.
+
+Validation and acceptance:
+
+- Initial static checks, mocked behavior checks, and whitespace checks passed before publication of the initial capacity changes. Mocks covered multi-subscription selection, missing/zero metrics, export behavior, and pool/metric failures.
+- The owner then explicitly requested skipping further validation. Later capacity-column, hourly-default, seven-day-default, and README changes were published without rerunning tests. Updated behavior tests exist but are not a claim of passing validation for those later commits.
+- No authenticated live Azure execution or acceptance of the final CSV shape was performed by this chat. Publication on GitHub is complete; live acceptance remains unverified.
+- Handoff check: collector source, documentation, and test files were compared with the published main baseline. No test suite or Azure calls were run during handoff.
+
+Remaining gate: owner review/authorization before merging this documentation branch or resuming implementation/testing. Live Azure validation and acceptance of the final CSV shape remain outstanding. No production deployment is part of this script publication.
