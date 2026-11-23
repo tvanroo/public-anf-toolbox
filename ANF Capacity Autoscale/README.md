@@ -26,7 +26,12 @@ The deployer must be allowed to deploy into the target ANF account resource grou
 
 ## Capacity autoscale behavior
 
-The runbook compares observed consumed capacity against the configured free-space buffer and adjusts provisioned capacity only when a scheduled run sees that a threshold condition has been met. When consumed capacity reaches the minimum free-space threshold, the volume and pool are expanded. When consumption has fallen far enough that capacity can be removed while preserving the configured buffer, the volume and pool can contract.
+On each run, the autoscaler takes the highest hourly average of consumed capacity in the lookback window. For both growth and shrinkage, it chooses the larger of these two quota targets.
+
+- **GiB buffer** adds `ANF_MinimumFreeSpaceGiB` to observed usage.
+- **Percentage buffer** divides observed usage by `1 − ANF_MinimumFreeSpacePercent / 100` and rounds up to a whole GiB. The percentage is the free portion of the resulting volume quota. Set it to `0` to use only the GiB buffer.
+
+For example, with 3,800 GiB used, a 256 GiB buffer gives a target of 4,056 GiB. A 15% buffer gives 4,471 GiB, leaving 671 GiB free. With those settings, a 4,096 GiB volume would grow to 4,471 GiB and a 5,120 GiB volume would shrink to the same quota. Existing per-run growth and volume size limits still apply. Usage can cross an alert threshold between scheduled runs.
 
 ![ANF Capacity Autoscale behavior over a month](media/capacity-autoscale-threshold-behavior.png)
 
@@ -36,12 +41,13 @@ After deployment, open the Automation Account in Azure Portal and go to **Shared
 
 ![Azure Automation variables for ANF Capacity Autoscale](media/automation-variables.png)
 
-The three green-highlighted variables in the screenshot are the ones most users are likely to edit after the first deployment:
+These settings control how much space the runbook keeps free and when it applies changes. Existing Automation Accounts can add `ANF_MinimumFreeSpacePercent` as an Integer variable after importing the updated runbook. If it is absent, the runbook uses `0`.
 
 | Variable | Impact |
 | --- | --- |
 | `ANF_TestMode` | Deployment defaults this to `Yes`, which previews decisions and writes no pool, volume, or throughput changes. `ANF_TestMode` must be changed to `No` before the runbook applies any changes. Set it back to `Yes` when you want to preview the impact of a policy change before allowing writes again. |
-| `ANF_MinimumFreeSpaceGiB` | Controls the free-space buffer. A volume expands when its free space is at or below this value, and a volume contraction target is calculated as max observed consumed size plus this value. Higher values keep more spare capacity in each volume; lower values keep volumes tighter. |
+| `ANF_MinimumFreeSpaceGiB` | Absolute free-space buffer for growth and shrinkage. The runbook checks for growth when free space is at or below this value. |
+| `ANF_MinimumFreeSpacePercent` | Whole percentage from 0 to 99. A volume below this percentage is considered for growth. Shrinkage preserves the larger of the percentage and GiB buffers. |
 | `ANF_CapacityLookBackHours` | Controls how far back the runbook queries `VolumeLogicalSize` metrics. The script uses the maximum observed consumed size in this window. A shorter window reacts faster to recent changes; a longer window is more conservative when consumption is bursty. |
 
 Other editable variables:
@@ -90,7 +96,8 @@ Settings can be supplied as Azure Automation variables or as Cloud Shell/local p
 | `ANF_CapacityPoolResourceId` | required | One or more target capacity pool Resource IDs. The script derives subscription, resource group, ANF account, and pool from each value. |
 | `ANF_TestMode` | `Yes` | `Yes` previews only; `No` applies changes. This must be `No` before any resize or throughput updates are written. |
 | `ANF_CapacityResizeThreshold` | `99` | Expands a volume when max observed utilization is at or above this percent. |
-| `ANF_MinimumFreeSpaceGiB` | `256` | Expands a volume when free space is at or below this value; also sizes expansion/contraction targets. |
+| `ANF_MinimumFreeSpaceGiB` | `256` | Absolute free-space buffer in GiB for growth and shrinkage. |
+| `ANF_MinimumFreeSpacePercent` | `0` | Optional free percentage of the target quota for growth and shrinkage. Zero disables the percentage buffer. |
 | `ANF_MinimumVolumeGrowthPercent` | `0` | Minimum percent growth when expanding a volume. |
 | `ANF_MaximumVolumeGrowthPercent` | `10000000` | Maximum percent growth allowed in one run. |
 | `ANF_CapacityLookBackHours` | `24` | Lookback window for the `VolumeLogicalSize` metric. |
@@ -118,11 +125,11 @@ These values are currently fixed in the script rather than exposed as inputs.
 | Decision | Value | Notes |
 | --- | --- | --- |
 | Default volume minimum throughput | `1` MiB/s | Used when a volume is absent from `ANF_VolumeMinThroughputMap`. |
-| Volume contraction target | `MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB` | Volumes that do not need expansion can shrink directly to this target, subject to fixed regular/large volume limits. |
+| Volume contraction target | Larger of the GiB and percentage quota targets | Volumes eligible to shrink can contract directly to this quota, subject to the volume minimum size. |
 | Pool sizing increment | `1024` GiB | Pool targets are rounded to whole TiB. |
 | Minimum pool size | `1` TiB | Pool target is never below 1 TiB. |
 | Capacity metric time grain | `01:00:00` | `VolumeLogicalSize` is queried hourly over the lookback window. |
-| Missing capacity metric data | `0` consumed | Missing or empty metric data is treated as 0 GiB consumed. |
+| Missing capacity metric data | Skip volume for this run | If the query fails or returns no usable samples, the runbook logs a warning and keeps the volume's current quota in the pool target. It reserves the volume's current Manual QoS throughput. A measured zero is a valid sample. |
 
 ## GA Safety Notes
 
