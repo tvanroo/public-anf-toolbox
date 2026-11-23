@@ -43,6 +43,15 @@
         "description": "Expand a volume when free space is at or below this value. Also used in target size calculations."
       }
     },
+    "minimumFreeSpacePercent": {
+      "type": "int",
+      "defaultValue": 0,
+      "minValue": 0,
+      "maxValue": 99,
+      "metadata": {
+        "description": "Minimum percentage of the target volume quota to keep free when growing or shrinking. The larger of the GiB and percentage buffers applies. Use 0 to disable the percentage buffer."
+      }
+    },
     "minimumVolumeGrowthPercent": {
       "type": "int",
       "defaultValue": 0,
@@ -122,6 +131,9 @@
           },
           "minimumFreeSpaceGiB": {
             "value": "[parameters('minimumFreeSpaceGiB')]"
+          },
+          "minimumFreeSpacePercent": {
+            "value": "[parameters('minimumFreeSpacePercent')]"
           },
           "minimumVolumeGrowthPercent": {
             "value": "[parameters('minimumVolumeGrowthPercent')]"

@@ -129,7 +129,6 @@ Assert-Contains -Haystack $scriptText -Needle 'ANF_MaximumVolumeGrowthPercent: M
 Assert-Contains -Haystack $scriptText -Needle 'ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)' -Message 'Expected script header to document actual minimum free space default.'
 Assert-Contains -Haystack $scriptText -Needle 'Classic service level throughput per TiB is hard-coded' -Message 'Expected script header to document fixed classic service level throughput rates.'
 Assert-Contains -Haystack $scriptText -Needle 'Breakthrough large volumes are excluded from changes' -Message 'Expected script header to document breakthrough exclusion.'
-Assert-Contains -Haystack $scriptText -Needle 'Volume contraction targets MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB without extra utilization or free-space gates.' -Message 'Expected script header to document unconstrained contraction target behavior.'
 Assert-Contains -Haystack $scriptText -Needle 'Pool expands or contracts to the minimum whole-TiB size required by planned volume targets' -Message 'Expected script header to document direct pool expansion/contraction target behavior.'
 Assert-NotContains -Haystack $scriptText -Needle 'capacityResizeThreshold - 15' -Message 'Expected volume contraction not to require an extra 15 percentage point utilization buffer.'
 Assert-NotContains -Haystack $scriptText -Needle 'minimumFreeSpaceGiB * 3' -Message 'Expected volume contraction not to require a 3x minimum-free-space gate.'
@@ -170,10 +169,10 @@ Assert-NotContains -Haystack $readmeText -Needle 'ANF_MaxThroughputPerTiB' -Mess
 Assert-NotContains -Haystack $readmeText -Needle 'ANF_MinimumPoolThroughputMibps' -Message 'Expected README not to expose FSL minimum pool throughput.'
 Assert-NotContains -Haystack $readmeText -Needle 'ANF_LargeVolumeLimitMode' -Message 'Expected README not to expose large volume limit mode.'
 Assert-NotContains -Haystack $readmeText -Needle 'Extra-large cool-access' -Message 'Expected README not to describe unsupported extra-large cool-access sizing.'
-Assert-Contains -Haystack $readmeText -Needle '| Volume contraction target | `MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB` |' -Message 'Expected README hard-coded decision table to document direct volume contraction target behavior.'
+Assert-Contains -Haystack $readmeText -Needle '| `ANF_MinimumFreeSpacePercent` | `0` |' -Message 'Expected README to document the disabled percentage buffer default.'
 Assert-NotContains -Haystack $readmeText -Needle 'Contraction utilization buffer' -Message 'Expected README not to document the removed contraction utilization buffer.'
 Assert-NotContains -Haystack $readmeText -Needle 'Contraction free-space gate' -Message 'Expected README not to document the removed contraction free-space gate.'
-Assert-Contains -Haystack $readmeText -Needle '| Missing capacity metric data | `0` consumed |' -Message 'Expected README hard-coded decision table to document missing metric fallback.'
+Assert-Contains -Haystack $readmeText -Needle '| Missing capacity metric data | Skip volume for this run |' -Message 'Expected README to document that volumes without usable metrics are skipped.'
 Assert-Contains -Haystack $deployText -Needle '"ANF_TestMode"' -Message 'Expected commercial deploy template to create editable ANF_TestMode Automation variable.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.NetAppFiles"' -Message 'Expected commercial deploy template not to import Az.NetAppFiles into the PowerShell 7.2 runtime.'
 Assert-NotContains -Haystack $deployText -Needle '"Az.Monitor"' -Message 'Expected commercial deploy template not to import Az.Monitor into the PowerShell 7.2 runtime.'
@@ -212,11 +211,22 @@ Assert-NotContains -Haystack $deployGovText -Needle '"anfAccountName"' -Message 
 Assert-NotContains -Haystack $deployGovText -Needle '"anfPoolName"' -Message 'Expected Azure Gov deploy template not to ask for capacity pool separately.'
 Assert-NotContains -Haystack $deployGovText -Needle '"largeVolumeLimitMode"' -Message 'Expected Azure Gov deploy template not to ask for large volume limit mode.'
 
-if ($deployText) {
-    $null = $deployText | ConvertFrom-Json -ErrorAction Stop
+$template = $deployText | ConvertFrom-Json -ErrorAction Stop
+$govTemplate = $deployGovText | ConvertFrom-Json -ErrorAction Stop
+foreach ($deployment in $template, $govTemplate) {
+    $parameter = $deployment.parameters.minimumFreeSpacePercent
+    if ($parameter.type -ne 'int' -or $parameter.defaultValue -ne 0 -or $parameter.minValue -ne 0 -or $parameter.maxValue -ne 99) {
+        throw 'Both deployments must accept a whole free-space percentage from 0 to 99 and default to 0.'
+    }
 }
-if ($deployGovText) {
-    $null = $deployGovText | ConvertFrom-Json -ErrorAction Stop
+$percentVariable = @($template.resources | Where-Object {
+    $_.type -eq 'Microsoft.Automation/automationAccounts/variables' -and $_.name -match "/ANF_MinimumFreeSpacePercent'"
+})
+if ($percentVariable.Count -ne 1 -or $percentVariable[0].properties.value -ne "[string(parameters('minimumFreeSpacePercent'))]") {
+    throw 'Expected the percentage parameter to populate the editable Automation variable.'
+}
+if ($govTemplate.resources[0].properties.parameters.minimumFreeSpacePercent.value -ne "[parameters('minimumFreeSpacePercent')]") {
+    throw 'Expected Azure Government to forward the percentage to the shared template.'
 }
 
 Write-Output 'ANF-Capacity-Autoscale static checks passed.'

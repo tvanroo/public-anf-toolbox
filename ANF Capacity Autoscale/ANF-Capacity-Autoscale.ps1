@@ -57,6 +57,7 @@ Azure Automation Account Setup Requirements:
    - ANF_MinimumVolumeGrowthPercent: Minimum growth percent (int, default: 0)
    - ANF_MaximumVolumeGrowthPercent: Maximum growth percent (int, default: 10000000)
    - ANF_MinimumFreeSpaceGiB: Minimum free space in GiB (int, default: 256)
+   - ANF_MinimumFreeSpacePercent: Minimum free space as a percentage of the target quota (integer 0-99, default: 0 disables this buffer)
    - ANF_CapacityLookBackHours: Metrics lookback hours (int, default: 24)
    - ANF_TestMode: "Yes" for test mode, "No" for live (string, default: "Yes")
    - ANF_LargeVolumeMaximumSizeGiB: Large volume maximum size guard (int, default: 1048576)
@@ -68,8 +69,8 @@ Azure Automation Account Setup Requirements:
 4. VOLUME EXPANSION/CONTRACTION LOGIC:
    - When multiple capacity pool Resource IDs are configured, each pool is processed independently.
    - Service level, QoS type, pool capacity, pool throughput, volume list, and metrics are re-read for every pool.
-   - Expands volume if utilization % OR absolute GiB threshold is exceeded
-   - Contracts volumes to max observed consumed size plus configured free space when they are oversized.
+   - Checks for growth on high utilization, low free GiB, or free space below the configured percentage.
+   - Growth and contraction use the larger quota required by the GiB and percentage buffers.
    - Pool automatically resizes in TiB increments for maximum cost efficiency
    - Pool expands or contracts to the minimum whole-TiB size required by planned volume targets
    - Classic manual QoS throughput is allocated proportionally with per-volume minimums respected
@@ -80,8 +81,7 @@ Azure Automation Account Setup Requirements:
    - Large volume minimum is fixed at 51200 GiB; maximum defaults to 1048576 GiB and can be overridden.
    - Regular volumes are not converted to large volumes; existing large volumes are detected from Azure properties.
    - Breakthrough large volumes are excluded from changes and produce a warning.
-   - Volume contraction targets MaxConsumedSizeGiB + ANF_MinimumFreeSpaceGiB without extra utilization or free-space gates.
-   - Missing capacity metric data is treated as 0 GiB consumed.
+   - Volumes without usable capacity metrics keep their current quota and throughput for the run.
 
 5. RECOMMENDED SCHEDULE:
    - Run every 4-6 hours for proactive management
@@ -258,6 +258,12 @@ function Convert-AnfJsonObjectToHashtable {
     $minimumFreeSpaceGiB = Get-AnfSetting -Name "ANF_MinimumFreeSpaceGiB"
     if (-not $minimumFreeSpaceGiB) { $minimumFreeSpaceGiB = 256 }                   # Minimum free space threshold in GiB (10 GiB)
 
+    $percentSetting = Get-AnfSetting -Name "ANF_MinimumFreeSpacePercent" -Default 0
+    $minimumFreeSpacePercent = 0
+    if (-not [int]::TryParse([string]$percentSetting, [ref]$minimumFreeSpacePercent) -or $minimumFreeSpacePercent -lt 0 -or $minimumFreeSpacePercent -ge 100) {
+        throw "ANF_MinimumFreeSpacePercent must be a whole number from 0 to 99."
+    }
+
     # Volume size limit profiles. Regular volumes cannot be converted to large volumes by resizing.
     $regularVolumeMinimumSizeGiB = 50
     $regularVolumeMaximumSizeGiB = 102400
@@ -303,6 +309,7 @@ Write-Output "Primary ANF Account: $anfAccountName"
 Write-Output "Primary ANF Pool: $anfPoolName"
 Write-Output "Capacity Resize Threshold: $capacityResizeThreshold%"
 Write-Output "Minimum Free Space: $minimumFreeSpaceGiB GiB"
+Write-Output "Minimum Free Space Percent: $minimumFreeSpacePercent%"
 Write-Output "Capacity Lookback Hours: $capacityLookBackHours"
 Write-Output "Regular Volume Limits: $regularVolumeMinimumSizeGiB-$regularVolumeMaximumSizeGiB GiB"
 Write-Output "Large Volume Limits: $largeVolumeMinimumSizeGiB-$largeVolumeMaximumSizeGiB GiB"
@@ -606,6 +613,9 @@ function Get-AnfMetricAverageValues {
 
     $averages = @()
     foreach ($metric in @($metricsResponse.value)) {
+        if ($metric.errorCode -and $metric.errorCode -ne 'Success') {
+            throw "Azure Monitor returned $($metric.errorCode) for $MetricName. $($metric.errorMessage)"
+        }
         foreach ($timeSeries in @($metric.timeseries)) {
             foreach ($dataPoint in @($timeSeries.data)) {
                 if ($null -ne $dataPoint.average) {
@@ -1139,44 +1149,33 @@ foreach ($anfVolume in $anfVolumes) {
     $volumeName = Get-AnfVolumeShortName -VolumeObject $anfVolume
     Write-Output "  Processing volume: $volumeName"
     
-    # Get current capacity metrics
-    try {
-        # Get VolumeLogicalSize metric (actual consumed space)
-        $consumedSizeMetricAverages = @(Get-AnfMetricAverageValues -ResourceId $anfVolume.Id -MetricName 'VolumeLogicalSize' -LookBackHours $capacityLookBackHours)
-        $avgConsumedSizeBytes = if ($consumedSizeMetricAverages.Count -gt 0) {
-            ($consumedSizeMetricAverages | Measure-Object -Average).Average
-        } else { 
-            0 
-        }
-        
-        # Get maximum consumed size in the lookback period
-        $maxConsumedSizeBytes = if ($consumedSizeMetricAverages.Count -gt 0) {
-            ($consumedSizeMetricAverages | Measure-Object -Maximum).Maximum
-        } else { 
-            0 
-        }
-        
-        # Convert to GiB
-        $avgConsumedSizeGiB = [math]::Round($avgConsumedSizeBytes / 1024 / 1024 / 1024, 2)
-        $maxConsumedSizeGiB = [math]::Round($maxConsumedSizeBytes / 1024 / 1024 / 1024, 2)
-        
-    } catch {
-        Write-Warning "Could not retrieve capacity metrics for volume $volumeName`: $_"
-        $avgConsumedSizeGiB = 0
-        $maxConsumedSizeGiB = 0
-    }
-    
-    # Calculate current volume info
-    $currentVolumeSizeGiB = [math]::Round($anfVolume.UsageThreshold / 1024 / 1024 / 1024, 2)
+    $currentVolumeSizeGiB = $anfVolume.UsageThreshold / 1GB
     $volumeSizeProfile = Resolve-AnfVolumeSizeProfile -VolumeObject $anfVolume -CurrentSizeGiB $currentVolumeSizeGiB
-    $currentUtilizationPercent = if ($currentVolumeSizeGiB -gt 0) { 
-        [math]::Round(($maxConsumedSizeGiB / $currentVolumeSizeGiB) * 100, 2) 
-    } else { 
-        0 
+    $excludeReason = $volumeSizeProfile.ExcludeReason
+    $maxConsumedSizeBytes = $null
+    $avgConsumedSizeGiB = $null
+    $maxConsumedSizeGiB = $null
+    $freeSpaceGiB = $null
+    $currentUtilizationPercent = $null
+    try {
+        $consumedSizeMetricAverages = @(Get-AnfMetricAverageValues -ResourceId $anfVolume.Id -MetricName 'VolumeLogicalSize' -LookBackHours $capacityLookBackHours)
+        if ($consumedSizeMetricAverages.Count -eq 0) {
+            throw "Azure Monitor returned no samples for the selected lookback window."
+        }
+
+        $usage = $consumedSizeMetricAverages | Measure-Object -Average -Maximum
+        $maxConsumedSizeBytes = $usage.Maximum
+        $avgConsumedSizeGiB = [math]::Round($usage.Average / 1GB, 2)
+        $maxConsumedSizeGiB = [math]::Round($maxConsumedSizeBytes / 1GB, 2)
+        $freeSpaceGiB = [math]::Round($currentVolumeSizeGiB - $maxConsumedSizeGiB, 2)
+        $currentUtilizationPercent = if ($currentVolumeSizeGiB -gt 0) {
+            [math]::Round(($maxConsumedSizeGiB / $currentVolumeSizeGiB) * 100, 2)
+        } else {
+            0
+        }
+    } catch {
+        $excludeReason = "$excludeReason VolumeLogicalSize unavailable: $($_.Exception.Message)".Trim()
     }
-    
-    # Calculate free space
-    $freeSpaceGiB = [math]::Round($currentVolumeSizeGiB - $maxConsumedSizeGiB, 2)
     
     # Get current throughput if QoS is Manual
     $resolvedCurrentThroughputMibps = Resolve-AnfThroughputMibpsFromProperties -Properties $anfVolume
@@ -1200,28 +1199,25 @@ foreach ($anfVolume in $anfVolumes) {
         IsLargeVolume = $volumeSizeProfile.IsLargeVolume
         LargeVolumeType = $volumeSizeProfile.LargeVolumeType
         VolumeLimitProfile = $volumeSizeProfile.ProfileName
-        ExcludedFromAutoscale = (-not $volumeSizeProfile.IsSupported)
-        ExcludeReason = $volumeSizeProfile.ExcludeReason
+        ExcludedFromAutoscale = [bool]$excludeReason
+        ExcludeReason = $excludeReason
         MinimumSizeGiB = $volumeSizeProfile.MinimumSizeGiB
         MaximumSizeGiB = $volumeSizeProfile.MaximumSizeGiB
         CurrentSizeGiB = $currentVolumeSizeGiB
         AvgConsumedSizeGiB = $avgConsumedSizeGiB
         MaxConsumedSizeGiB = $maxConsumedSizeGiB
+        MaxConsumedSizeBytes = $maxConsumedSizeBytes
         FreeSpaceGiB = $freeSpaceGiB
         CurrentUtilizationPercent = $currentUtilizationPercent
         CurrentThroughputMibps = $currentThroughputMibps
         MinThroughputMibps = $minThroughputMibps
         NeedsResize = $false
-        ResizeAction = "None"
+        ResizeAction = if ($excludeReason) { "Skip" } else { "None" }
         NewSizeGiB = $currentVolumeSizeGiB
         NewThroughputMibps = $currentThroughputMibps
-        ResizeReason = ""
+        ResizeReason = $excludeReason
     }
 
-    if ($volumeDataObject.ExcludedFromAutoscale) {
-        Write-Warning "Breakthrough large volume '$volumeName' found. Excluding it from capacity and throughput changes. Reason: $($volumeDataObject.ExcludeReason)"
-    }
-    
     $volumeData += $volumeDataObject
 }
 
@@ -1241,27 +1237,32 @@ $volumesNeedingResize = @()
 foreach ($volume in $volumeData) {
     Write-Output "  Analyzing volume: $($volume.ShortName)"
     Write-Output "    Current Size: $($volume.CurrentSizeGiB) GiB"
+    if ($volume.ExcludedFromAutoscale) {
+        Write-Warning "Skipping volume '$($volume.ShortName)' and reserving its current quota and throughput. $($volume.ExcludeReason)"
+        continue
+    }
+
     Write-Output "    Max Consumed: $($volume.MaxConsumedSizeGiB) GiB" 
     Write-Output "    Free Space: $($volume.FreeSpaceGiB) GiB"
     Write-Output "    Utilization: $($volume.CurrentUtilizationPercent)%"
     Write-Output "    Volume Profile: $($volume.VolumeLimitProfile) (limits: $($volume.MinimumSizeGiB)-$($volume.MaximumSizeGiB) GiB)"
 
-    if ($volume.ExcludedFromAutoscale) {
-        Write-Warning "    Excluded from autoscale changes: $($volume.ExcludeReason)"
-        continue
+    $requiredSizeForFreeSpace = $volume.MaxConsumedSizeGiB + $minimumFreeSpaceGiB
+    $belowPercentBuffer = $false
+    if ($minimumFreeSpacePercent -gt 0) {
+        # Compare against the unrounded quota, then round the percentage sizing target up to whole GiB.
+        $quotaForPercentGiB = [decimal]$volume.MaxConsumedSizeBytes * 100 / (100 - $minimumFreeSpacePercent) / 1GB
+        $belowPercentBuffer = $volume.CurrentSizeGiB -lt $quotaForPercentGiB
+        $requiredSizeForFreeSpace = [math]::Max($requiredSizeForFreeSpace, [double][math]::Ceiling($quotaForPercentGiB))
     }
-    
-    # Check if volume needs expansion (either threshold exceeded)
-    $needsExpansion = ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) -or ($volume.FreeSpaceGiB -le $minimumFreeSpaceGiB)
+
+    $needsExpansion = ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) -or ($volume.FreeSpaceGiB -le $minimumFreeSpaceGiB) -or $belowPercentBuffer
     
     # If expansion is not needed, shrink directly to the consumed-size target subject to the fixed ANF size profile.
     $canContract = $volume.CurrentSizeGiB -gt $volume.MinimumSizeGiB
     
     if ($needsExpansion) {
-        Write-Output "    → Expansion needed: Utilization=$($volume.CurrentUtilizationPercent)% (threshold=$capacityResizeThreshold%), Free=$($volume.FreeSpaceGiB)GiB (min=$minimumFreeSpaceGiB GiB)"
-        
-        # Calculate new size for expansion - ensure adequate free space
-        $requiredSizeForFreeSpace = $volume.MaxConsumedSizeGiB + $minimumFreeSpaceGiB
+        Write-Output "    → Checking growth: utilization=$($volume.CurrentUtilizationPercent)%, free=$($volume.FreeSpaceGiB) GiB, target quota for configured buffers=$requiredSizeForFreeSpace GiB"
         
         # Apply minimum growth percentage
         $minimumNewSize = [math]::Ceiling($volume.CurrentSizeGiB * (1 + ($minimumVolumeGrowthPercent / 100)))
@@ -1295,6 +1296,8 @@ foreach ($volume in $volumeData) {
             # Determine primary reason for expansion
             if ($volume.CurrentUtilizationPercent -ge $capacityResizeThreshold) {
                 $volume.ResizeReason = "High utilization ($($volume.CurrentUtilizationPercent)% >= $capacityResizeThreshold%)"
+            } elseif ($belowPercentBuffer) {
+                $volume.ResizeReason = "Free space below the $minimumFreeSpacePercent% minimum"
             } else {
                 $volume.ResizeReason = "Low free space ($($volume.FreeSpaceGiB) GiB <= $minimumFreeSpaceGiB GiB)"
             }
@@ -1304,8 +1307,7 @@ foreach ($volume in $volumeData) {
         }
     } elseif ($canContract) {
         # Calculate new size for contraction - keep adequate free space but minimize over-provisioning
-        $optimalSizeWithBuffer = $volume.MaxConsumedSizeGiB + $minimumFreeSpaceGiB
-        $newSize = [math]::Max($optimalSizeWithBuffer, $volume.MinimumSizeGiB)
+        $newSize = [math]::Max($requiredSizeForFreeSpace, $volume.MinimumSizeGiB)
         
         # Ensure we're actually reducing
         if ($newSize -lt $volume.CurrentSizeGiB) {
@@ -1614,10 +1616,10 @@ if ($testMode -eq "No" -and ($volumesNeedingResize.Count -gt 0 -or $poolNeedsRes
         foreach ($volume in $volumesNeedingVerification) {
             $verifyVolume = $anfVolumesVerify | Where-Object { (Get-AnfVolumeShortName -VolumeObject $_) -eq $volume.ShortName }
             if ($verifyVolume) {
-                $verifyVolumeSizeGiB = [math]::Round($verifyVolume.UsageThreshold / 1024 / 1024 / 1024, 0)
+                $verifyVolumeSizeGiB = $verifyVolume.UsageThreshold / 1GB
                 
                 if ($volume.NeedsResize) {
-                    if ($verifyVolumeSizeGiB -eq $volume.NewSizeGiB) {
+                    if ([math]::Abs($verifyVolume.UsageThreshold - $volume.NewSizeGiB * 1GB) -lt 1) {
                         Write-Output "✓ Volume '$($volume.ShortName)' size verified: $verifyVolumeSizeGiB GiB (matches expected $($volume.NewSizeGiB) GiB)"
                     } else {
                         Write-Warning "✗ Volume '$($volume.ShortName)' size mismatch: Current=$verifyVolumeSizeGiB GiB, Expected=$($volume.NewSizeGiB) GiB"

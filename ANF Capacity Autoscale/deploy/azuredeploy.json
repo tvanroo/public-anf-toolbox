@@ -43,6 +43,15 @@
         "description": "Expand a volume when free space is at or below this value. Also used in target size calculations."
       }
     },
+    "minimumFreeSpacePercent": {
+      "type": "int",
+      "defaultValue": 0,
+      "minValue": 0,
+      "maxValue": 99,
+      "metadata": {
+        "description": "Minimum percentage of the target volume quota to keep free when growing or shrinking. The larger of the GiB and percentage buffers applies. Use 0 to disable the percentage buffer."
+      }
+    },
     "minimumVolumeGrowthPercent": {
       "type": "int",
       "defaultValue": 0,
@@ -292,6 +301,19 @@
         "isEncrypted": false,
         "description": "Minimum free space in GiB.",
         "value": "[string(parameters('minimumFreeSpaceGiB'))]"
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/variables",
+      "apiVersion": "2023-11-01",
+      "name": "[concat(variables('automationAccountName'), '/ANF_MinimumFreeSpacePercent')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', variables('automationAccountName'))]"
+      ],
+      "properties": {
+        "isEncrypted": false,
+        "description": "Minimum free space as a percentage of the target quota. Zero disables the percentage buffer.",
+        "value": "[string(parameters('minimumFreeSpacePercent'))]"
       }
     },
     {
